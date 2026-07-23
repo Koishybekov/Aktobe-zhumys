@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MapPin, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { AvatarUpload } from '@/components/auth/AvatarUpload';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useAppStore } from '@/store/useAppStore';
 import { AKTOBE_DISTRICTS, DEFAULT_CITY, WORKER_SKILL_CATEGORIES } from '@/lib/constants';
@@ -12,9 +14,11 @@ import { cn } from '@/lib/utils';
 export function ProfileSetupPage() {
   const navigate = useNavigate();
   const { t, locale, category } = useTranslation();
-  const { profile, selectedRole, completeProfileSetup, isSubmitting, error, draftFullName, draftAvatar } = useAuthStore();
+  const { profile, selectedRole, completeProfileSetup, isSubmitting, error } = useAuthStore();
   const syncUserFromAuth = useAppStore((s) => s.syncUserFromAuth);
 
+  const [fullName, setFullName] = useState(profile?.full_name ?? '');
+  const [avatar, setAvatar] = useState<string | null>(profile?.avatar_url ?? null);
   const [district, setDistrict] = useState(profile?.district ?? '');
   const [skills, setSkills] = useState<string[]>(profile?.skills ?? []);
 
@@ -27,8 +31,8 @@ export function ProfileSetupPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await completeProfileSetup({
-      full_name: draftFullName || profile?.full_name || '',
-      avatar_url: draftAvatar ?? profile?.avatar_url ?? null,
+      full_name: fullName.trim(),
+      avatar_url: avatar,
       city: DEFAULT_CITY,
       district,
       skills: showSkills ? skills : [],
@@ -48,7 +52,7 @@ export function ProfileSetupPage() {
             <Sparkles className="h-3.5 w-3.5" />
             {t('almostThere')}
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">{t('selectDistrict')}</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('setupProfile')}</h1>
           <p className="text-sm text-gray-500 mt-1 flex items-center justify-center gap-1">
             <MapPin className="h-3.5 w-3.5 text-emerald-500" />
             {DEFAULT_CITY}
@@ -56,6 +60,24 @@ export function ProfileSetupPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6 animate-fade-in">
+          <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm space-y-4">
+            <AvatarUpload
+              value={avatar}
+              name={fullName}
+              onChange={setAvatar}
+              labels={{ photo: t('profilePhoto'), tap: t('tapToUpload'), remove: t('removePhoto') }}
+            />
+            <div className="space-y-2">
+              <Label htmlFor="fullName">{t('fullName')}</Label>
+              <Input
+                id="fullName"
+                placeholder={t('fullNamePlaceholder')}
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+              />
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm space-y-3">
             <Label>{t('selectDistrict')}</Label>
             <div className="flex flex-wrap gap-2">

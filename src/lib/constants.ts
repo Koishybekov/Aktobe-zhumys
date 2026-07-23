@@ -50,6 +50,16 @@ export const WORKER_SKILL_CATEGORIES = [
 export const DEFAULT_USER_ID = 'user-001';
 export const CURRENT_USER_ID = DEFAULT_USER_ID;
 
+/** Admin WhatsApp / payment contact (digits only) */
+export const ADMIN_WHATSAPP =
+  (import.meta.env.VITE_ADMIN_WHATSAPP ?? '77762916969').replace(/\D/g, '');
+
+/** Kaspi Gold number shown for subscription payment */
+export const KASPI_PAYMENT_PHONE =
+  import.meta.env.VITE_KASPI_PHONE ?? '+7 776 291 6969';
+
+export const SUBSCRIPTION_PRICE = 590;
+
 export function getDistrictLabel(id: string, locale: 'kk' | 'ru'): string {
   const d = AKTOBE_DISTRICTS.find((x) => x.id === id);
   if (!d) return id;

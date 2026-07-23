@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Crown, Check, CreditCard, QrCode } from 'lucide-react';
+import { Crown, Check, MessageCircle, Copy } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -9,33 +8,59 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from '@/lib/i18n/useTranslation';
-import { cn } from '@/lib/utils';
+import { KASPI_PAYMENT_PHONE, SUBSCRIPTION_PRICE, ADMIN_WHATSAPP } from '@/lib/constants';
+import { buildPaymentReceiptMessage } from '@/lib/admin';
+import { openWhatsApp } from '@/lib/whatsapp';
+import { hasActiveSubscription } from '@/lib/subscription';
+import type { Profile } from '@/types';
 
 interface ProSubscriptionModalProps {
   open: boolean;
   onClose: () => void;
-  onSubscribe: (method: 'kaspi' | 'card') => Promise<void>;
-  isSubmitting?: boolean;
+  userPhone: string;
+  paywall?: boolean;
+  /** seeker = job view limit, employer = job post limit */
+  paywallContext?: 'seeker' | 'employer';
 }
 
-export function ProSubscriptionModal({ open, onClose, onSubscribe, isSubmitting }: ProSubscriptionModalProps) {
+export function ProSubscriptionModal({ open, onClose, userPhone, paywall, paywallContext = 'seeker' }: ProSubscriptionModalProps) {
   const { t } = useTranslation();
-  const [method, setMethod] = useState<'kaspi' | 'card'>('kaspi');
 
   const benefits = [t('proBenefit1'), t('proBenefit2'), t('proBenefit3')];
 
+  const paywallTitle = paywallContext === 'employer' ? t('paywallPostTitle') : t('paywallTitle');
+  const paywallDesc = paywallContext === 'employer' ? t('paywallPostDesc') : t('paywallDesc');
+
+  const handleWhatsAppReceipt = () => {
+    openWhatsApp(ADMIN_WHATSAPP, buildPaymentReceiptMessage(userPhone));
+  };
+
+  const handleCopyKaspi = async () => {
+    try {
+      await navigator.clipboard.writeText(KASPI_PAYMENT_PHONE.replace(/\s/g, ''));
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-md p-0 overflow-hidden">
+      <DialogContent className="sm:max-w-md p-0 overflow-hidden max-h-[90vh] overflow-y-auto">
         <div className="bg-gradient-to-br from-indigo-600 to-emerald-600 p-6 text-white">
           <DialogHeader>
             <div className="flex items-center gap-2 mb-2">
               <Crown className="h-6 w-6 text-amber-300" />
               <span className="text-xs font-bold uppercase tracking-wide bg-white/20 px-2 py-0.5 rounded-full">PRO</span>
             </div>
-            <DialogTitle className="text-xl text-white text-left">{t('proModalTitle')}</DialogTitle>
-            <DialogDescription className="text-indigo-100 text-left">{t('proModalDesc')}</DialogDescription>
-            <p className="text-3xl font-bold mt-3">{t('proPrice')}</p>
+            <DialogTitle className="text-xl text-white text-left">
+              {paywall ? paywallTitle : t('proModalTitle')}
+            </DialogTitle>
+            <DialogDescription className="text-indigo-100 text-left">
+              {paywall ? paywallDesc : t('proModalDesc')}
+            </DialogDescription>
+            <p className="text-3xl font-bold mt-3">
+              {SUBSCRIPTION_PRICE} ₸<span className="text-base font-normal text-indigo-200">/{t('proMonth')}</span>
+            </p>
           </DialogHeader>
         </div>
 
@@ -49,43 +74,36 @@ export function ProSubscriptionModal({ open, onClose, onSubscribe, isSubmitting 
             ))}
           </ul>
 
-          <div className="space-y-2">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{t('paymentMethod')}</p>
-            <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">{t('kaspiPaymentTitle')}</p>
+            <p className="text-sm text-gray-700">{t('kaspiPaymentDesc')}</p>
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-white border border-emerald-100 px-3 py-2.5">
+              <div>
+                <p className="text-xs text-gray-400">Kaspi Gold</p>
+                <p className="font-bold text-gray-900">{KASPI_PAYMENT_PHONE}</p>
+                <p className="text-sm text-emerald-600 font-semibold">{SUBSCRIPTION_PRICE} ₸</p>
+              </div>
               <button
                 type="button"
-                onClick={() => setMethod('kaspi')}
-                className={cn(
-                  'flex flex-col items-center gap-2 rounded-xl border p-4 transition-all',
-                  method === 'kaspi' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-gray-200 hover:border-gray-300'
-                )}
+                onClick={() => void handleCopyKaspi()}
+                className="shrink-0 flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                aria-label={t('copyKaspi')}
               >
-                <QrCode className="h-6 w-6" />
-                <span className="text-xs font-semibold text-center">{t('proKaspi')}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setMethod('card')}
-                className={cn(
-                  'flex flex-col items-center gap-2 rounded-xl border p-4 transition-all',
-                  method === 'card' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 hover:border-gray-300'
-                )}
-              >
-                <CreditCard className="h-6 w-6" />
-                <span className="text-xs font-semibold text-center">{t('proCard')}</span>
+                <Copy className="h-4 w-4" />
               </button>
             </div>
           </div>
 
           <Button
-            className="w-full bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-700 hover:to-emerald-700"
+            className="w-full bg-[#25D366] hover:bg-[#20BD5A] text-white"
             size="lg"
-            disabled={isSubmitting}
-            onClick={() => void onSubscribe(method)}
+            onClick={handleWhatsAppReceipt}
           >
-            <Crown className="h-4 w-4" />
-            {isSubmitting ? t('saving') : t('proSubscribe')}
+            <MessageCircle className="h-5 w-5" />
+            {t('sendReceiptWhatsApp')}
           </Button>
+
+          <p className="text-xs text-center text-gray-400">{t('subscriptionActivationNote')}</p>
         </div>
       </DialogContent>
     </Dialog>
@@ -93,14 +111,15 @@ export function ProSubscriptionModal({ open, onClose, onSubscribe, isSubmitting 
 }
 
 interface ProSubscriptionCardProps {
-  isPro: boolean;
+  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro'>;
   onOpenModal: () => void;
 }
 
-export function ProSubscriptionCard({ isPro, onOpenModal }: ProSubscriptionCardProps) {
-  const { t } = useTranslation();
+export function ProSubscriptionCard({ profile, onOpenModal }: ProSubscriptionCardProps) {
+  const { t, locale } = useTranslation();
+  const active = hasActiveSubscription(profile);
 
-  if (isPro) {
+  if (active) {
     return (
       <div className="rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-indigo-50 p-4 flex items-center gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-600 to-emerald-600 text-white shrink-0">
@@ -108,7 +127,14 @@ export function ProSubscriptionCard({ isPro, onOpenModal }: ProSubscriptionCardP
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-gray-900">{t('proTitle')}</p>
-          <p className="text-xs text-emerald-600 font-medium">{t('proActive')} ✓</p>
+          <p className="text-xs text-emerald-600 font-medium">
+            {t('proActive')} ✓
+            {profile.subscribed_until && (
+              <span className="text-gray-400 ml-1">
+                · {t('proUntil')} {new Date(profile.subscribed_until).toLocaleDateString(locale === 'kk' ? 'kk-KZ' : 'ru-RU')}
+              </span>
+            )}
+          </p>
         </div>
         <span className="shrink-0 rounded-full bg-gradient-to-r from-indigo-600 to-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white">
           {t('proBadge')}

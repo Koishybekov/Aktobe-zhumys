@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import type {
   Profile,
   Job,
@@ -13,17 +14,21 @@ import { DEFAULT_CITY } from '@/lib/constants';
 import { generateId } from '@/lib/utils';
 import { loadAuthSession, saveAuthSession, updateSessionProfile } from '@/lib/authStorage';
 import { getActiveUserId, useAuthStore } from '@/store/useAuthStore';
+import { normalizePhone } from '@/lib/authPhone';
+import { buildSubscriptionActivation } from '@/lib/subscription';
+import {
+  canPostJob,
+  getPostedJobCount,
+} from '@/lib/jobPostLimit';
+import { updateMockUserProfileByPhone, findMockUserByPhone } from '@/lib/mockAuth';
 import {
   mockProfiles,
-  mockJobs,
-  mockApplications,
-  mockReviews,
-  mockMessages,
   getProfileById,
 } from '@/data/mockData';
 
 interface AppState {
   currentUser: Profile;
+  profiles: Profile[];
   activeMode: ActiveMode;
   jobs: Job[];
   applications: JobApplication[];
@@ -40,6 +45,7 @@ interface AppState {
   initialize: () => Promise<void>;
   syncUserFromAuth: () => void;
   resetSession: () => void;
+  teardownRealtime: () => void;
   setActiveMode: (mode: ActiveMode) => void;
   setSelectedCity: (city: string) => void;
   setSelectedDistrict: (district: string) => void;
@@ -64,7 +70,11 @@ interface AppState {
   submitReview: (input: ReviewInput) => Promise<void>;
   updateProfile: (updates: Partial<Profile>) => Promise<void>;
   subscribeToPro: () => Promise<void>;
+  adminActivateSubscription: (targetPhone: string) => Promise<Profile | null>;
+  updateProfileById: (id: string, updates: Partial<Profile>) => Promise<void>;
 }
+
+let syncChannel: RealtimeChannel | null = null;
 
 function delay(ms = 400): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -79,10 +89,11 @@ function resolveCurrentUser(): Profile {
 function loadMockState() {
   const user = resolveCurrentUser();
   return {
-    jobs: [...mockJobs],
-    applications: [...mockApplications],
-    reviews: [...mockReviews],
-    messages: [...mockMessages],
+    jobs: [] as Job[],
+    applications: [] as JobApplication[],
+    reviews: [] as Review[],
+    messages: [] as ChatMessage[],
+    profiles: [...mockProfiles],
     currentUser: user,
     selectedCity: user.city ?? DEFAULT_CITY,
     selectedDistrict: 'all',
@@ -90,6 +101,12 @@ function loadMockState() {
     initialized: true,
     initError: null as string | null,
   };
+}
+
+function requireSupabaseForJobs(): void {
+  if (IS_MOCK_MODE || !supabase) {
+    throw new Error('SUPABASE_REQUIRED');
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -105,8 +122,92 @@ function userId(): string {
   return getActiveUserId();
 }
 
+function upsertProfileList(profiles: Profile[], profile: Profile): Profile[] {
+  const idx = profiles.findIndex((p) => p.id === profile.id);
+  if (idx === -1) return [...profiles, profile];
+  const next = [...profiles];
+  next[idx] = profile;
+  return next;
+}
+
+function setupRealtime(set: (fn: (state: AppState) => Partial<AppState>) => void) {
+  if (IS_MOCK_MODE || !supabase) return;
+
+  if (syncChannel) {
+    supabase.removeChannel(syncChannel);
+    syncChannel = null;
+  }
+
+  syncChannel = supabase
+    .channel('app-sync')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'jobs' }, (payload) => {
+      set((state) => {
+        if (payload.eventType === 'INSERT') {
+          const row = payload.new as Job;
+          if (state.jobs.some((j) => j.id === row.id)) return {};
+          return { jobs: [row, ...state.jobs] };
+        }
+        if (payload.eventType === 'UPDATE') {
+          const row = payload.new as Job;
+          return { jobs: state.jobs.map((j) => (j.id === row.id ? row : j)) };
+        }
+        if (payload.eventType === 'DELETE') {
+          const row = payload.old as { id: string };
+          return { jobs: state.jobs.filter((j) => j.id !== row.id) };
+        }
+        return {};
+      });
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'job_applications' }, (payload) => {
+      set((state) => {
+        if (payload.eventType === 'INSERT') {
+          const row = payload.new as JobApplication;
+          if (state.applications.some((a) => a.id === row.id)) return {};
+          return { applications: [...state.applications, row] };
+        }
+        if (payload.eventType === 'UPDATE') {
+          const row = payload.new as JobApplication;
+          return { applications: state.applications.map((a) => (a.id === row.id ? row : a)) };
+        }
+        if (payload.eventType === 'DELETE') {
+          const row = payload.old as { id: string };
+          return { applications: state.applications.filter((a) => a.id !== row.id) };
+        }
+        return {};
+      });
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, (payload) => {
+      const row = payload.new as ChatMessage;
+      set((state) => {
+        if (state.messages.some((m) => m.id === row.id)) return {};
+        return { messages: [...state.messages, row] };
+      });
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reviews' }, (payload) => {
+      const row = payload.new as Review;
+      set((state) => {
+        if (state.reviews.some((r) => r.id === row.id)) return {};
+        return { reviews: [...state.reviews, row] };
+      });
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
+      set((state) => {
+        if (payload.eventType === 'DELETE') return {};
+        const row = payload.new as Profile;
+        const profiles = upsertProfileList(state.profiles, row);
+        const uid = userId();
+        if (row.id === uid) {
+          return { profiles, currentUser: row };
+        }
+        return { profiles };
+      });
+    })
+    .subscribe();
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   currentUser: mockProfiles[0],
+  profiles: [],
   activeMode: 'worker',
   jobs: [],
   applications: [],
@@ -133,48 +234,71 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       const uid = userId();
-      const [jobsRes, appsRes, reviewsRes, profileRes] = await withTimeout(
+      const [jobsRes, appsRes, reviewsRes, messagesRes, profilesRes, profileRes] = await withTimeout(
         Promise.all([
           supabase.from('jobs').select('*').order('created_at', { ascending: false }),
           supabase.from('job_applications').select('*'),
           supabase.from('reviews').select('*'),
+          supabase.from('chat_messages').select('*').order('created_at', { ascending: true }),
+          supabase.from('profiles').select('*'),
           supabase.from('profiles').select('*').eq('id', uid).maybeSingle(),
         ]),
-        8000
+        12000
       );
 
-      const hasErrors =
-        jobsRes.error || appsRes.error || reviewsRes.error || profileRes.error;
+      const errors = [
+        jobsRes.error,
+        appsRes.error,
+        reviewsRes.error,
+        messagesRes.error,
+        profilesRes.error,
+        profileRes.error,
+      ].filter(Boolean);
 
-      if (hasErrors) {
-        console.warn('[EasyJob] Supabase fetch failed — falling back to mock data.', {
-          jobs: jobsRes.error,
-          apps: appsRes.error,
-          reviews: reviewsRes.error,
-          profile: profileRes.error,
+      if (errors.length > 0) {
+        console.warn('[Актобе Жұмыс] Supabase fetch failed:', errors);
+        const user = resolveCurrentUser();
+        set({
+          jobs: [],
+          applications: [],
+          reviews: [],
+          messages: [],
+          profiles: profilesRes.data ?? [],
+          currentUser: profileRes.data ?? user,
+          selectedCity: (profileRes.data ?? user).city ?? DEFAULT_CITY,
+          isLoading: false,
+          initialized: true,
+          initError: errors[0]?.message ?? 'Failed to load data',
         });
-        set(loadMockState());
         return;
       }
 
       const profile = profileRes.data ?? resolveCurrentUser();
+      const profiles = profilesRes.data ?? [];
 
       set({
         jobs: jobsRes.data ?? [],
         applications: appsRes.data ?? [],
         reviews: reviewsRes.data ?? [],
-        messages: [...mockMessages],
+        messages: messagesRes.data ?? [],
+        profiles,
         currentUser: profile,
         selectedCity: profile.city ?? DEFAULT_CITY,
         isLoading: false,
         initialized: true,
         initError: null,
       });
+
+      setupRealtime(set);
     } catch (error) {
-      console.warn('[EasyJob] Initialize failed — falling back to mock data.', error);
+      console.warn('[Актобе Жұмыс] Initialize failed.', error);
+      const user = resolveCurrentUser();
       set({
         ...loadMockState(),
-        initError: null,
+        currentUser: user,
+        selectedCity: user.city ?? DEFAULT_CITY,
+        isLoading: false,
+        initError: error instanceof Error ? error.message : 'Failed to initialize',
       });
     }
   },
@@ -182,20 +306,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   syncUserFromAuth: () => {
     const profile = useAuthStore.getState().profile;
     if (!profile) return;
-    set({
+    set((state) => ({
       currentUser: profile,
-      selectedCity: profile.city ?? get().selectedCity,
+      profiles: upsertProfileList(state.profiles, profile),
+      selectedCity: profile.city ?? state.selectedCity,
       activeMode:
-        profile.role === 'client' ? 'client' : profile.role === 'worker' ? 'worker' : get().activeMode,
-    });
+        profile.role === 'client' ? 'client' : profile.role === 'worker' ? 'worker' : state.activeMode,
+    }));
+  },
+
+  teardownRealtime: () => {
+    if (syncChannel && supabase) {
+      supabase.removeChannel(syncChannel);
+      syncChannel = null;
+    }
   },
 
   resetSession: () => {
+    get().teardownRealtime();
     set({
       jobs: [],
       applications: [],
       reviews: [],
       messages: [],
+      profiles: [],
       initialized: false,
       isLoading: false,
       initError: null,
@@ -232,7 +366,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   getProfile: (id) => {
     const uid = userId();
     if (id === uid) return get().currentUser;
-    return getProfileById(id) ?? mockProfiles.find((p) => p.id === id);
+    return get().profiles.find((p) => p.id === id) ?? getProfileById(id) ?? mockProfiles.find((p) => p.id === id);
   },
 
   getApplicationsForJob: (jobId) => get().applications.filter((a) => a.job_id === jobId),
@@ -273,27 +407,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
 
     if (!IS_MOCK_MODE && supabase) {
-      try {
-        await supabase.from('job_applications').insert(newApp);
-      } catch (error) {
-        console.warn('[EasyJob] applyToJob remote failed, saved locally.', error);
-      }
+      const { data, error } = await supabase.from('job_applications').insert(newApp).select().single();
+      if (error) throw error;
+      if (data) newApp.id = data.id;
     } else {
       await delay(300);
     }
 
-    set((state) => ({ applications: [...state.applications, newApp] }));
+    set((state) => ({
+      applications: state.applications.some((a) => a.id === newApp.id)
+        ? state.applications
+        : [...state.applications, newApp],
+    }));
   },
 
   acceptWorker: async (jobId, workerId) => {
     if (!IS_MOCK_MODE && supabase) {
-      try {
-        await supabase.from('jobs').update({ status: 'in_progress', selected_worker_id: workerId }).eq('id', jobId);
-        await supabase.from('job_applications').update({ status: 'accepted' }).eq('job_id', jobId).eq('worker_id', workerId);
-        await supabase.from('job_applications').update({ status: 'rejected' }).eq('job_id', jobId).neq('worker_id', workerId);
-      } catch (error) {
-        console.warn('[EasyJob] acceptWorker remote failed, saved locally.', error);
-      }
+      const { error: jobErr } = await supabase
+        .from('jobs')
+        .update({ status: 'in_progress', selected_worker_id: workerId })
+        .eq('id', jobId);
+      if (jobErr) throw jobErr;
+
+      await supabase.from('job_applications').update({ status: 'accepted' }).eq('job_id', jobId).eq('worker_id', workerId);
+      await supabase.from('job_applications').update({ status: 'rejected' }).eq('job_id', jobId).neq('worker_id', workerId);
     } else {
       await delay(400);
     }
@@ -313,11 +450,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   completeJob: async (jobId) => {
     if (!IS_MOCK_MODE && supabase) {
-      try {
-        await supabase.from('jobs').update({ status: 'completed' }).eq('id', jobId);
-      } catch (error) {
-        console.warn('[EasyJob] completeJob remote failed, saved locally.', error);
-      }
+      const { error } = await supabase.from('jobs').update({ status: 'completed' }).eq('id', jobId);
+      if (error) throw error;
     } else {
       await delay(300);
     }
@@ -328,27 +462,33 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   createJob: async (jobData) => {
-    const uid = userId();
-    const newJob: Job = {
-      ...jobData,
-      id: generateId(),
-      client_id: uid,
-      status: 'open',
-      selected_worker_id: null,
-      created_at: new Date().toISOString(),
-    };
+    requireSupabaseForJobs();
 
-    if (!IS_MOCK_MODE && supabase) {
-      try {
-        await supabase.from('jobs').insert(newJob);
-      } catch (error) {
-        console.warn('[EasyJob] createJob remote failed, saved locally.', error);
-      }
-    } else {
-      await delay(500);
+    const uid = userId();
+    const postedCount = getPostedJobCount(get().jobs, uid);
+    if (!canPostJob(postedCount, get().currentUser)) {
+      throw new Error('POST_LIMIT');
     }
 
-    set((state) => ({ jobs: [newJob, ...state.jobs] }));
+    const { data, error } = await supabase!
+      .from('jobs')
+      .insert({
+        ...jobData,
+        client_id: uid,
+        status: 'open',
+        selected_worker_id: null,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!data) throw new Error('Failed to create job');
+
+    const newJob = data as Job;
+
+    set((state) => ({
+      jobs: state.jobs.some((j) => j.id === newJob.id) ? state.jobs : [newJob, ...state.jobs],
+    }));
     return newJob;
   },
 
@@ -363,16 +503,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
 
     if (!IS_MOCK_MODE && supabase) {
-      try {
-        await supabase.from('chat_messages').insert(newMsg);
-      } catch (error) {
-        console.warn('[EasyJob] sendMessage remote failed, saved locally.', error);
-      }
+      const { data, error } = await supabase.from('chat_messages').insert(newMsg).select().single();
+      if (error) throw error;
+      if (data) Object.assign(newMsg, data);
     } else {
       await delay(200);
     }
 
-    set((state) => ({ messages: [...state.messages, newMsg] }));
+    set((state) => ({
+      messages: state.messages.some((m) => m.id === newMsg.id)
+        ? state.messages
+        : [...state.messages, newMsg],
+    }));
   },
 
   submitReview: async (input) => {
@@ -387,34 +529,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
 
     if (!IS_MOCK_MODE && supabase) {
-      try {
-        await supabase.from('reviews').insert(newReview);
-      } catch (error) {
-        console.warn('[EasyJob] submitReview remote failed, saved locally.', error);
-      }
+      const { data, error } = await supabase.from('reviews').insert(newReview).select().single();
+      if (error) throw error;
+      if (data) newReview.id = data.id;
     } else {
       await delay(300);
     }
 
-    set((state) => ({ reviews: [...state.reviews, newReview] }));
+    set((state) => ({
+      reviews: state.reviews.some((r) => r.id === newReview.id)
+        ? state.reviews
+        : [...state.reviews, newReview],
+    }));
   },
 
   updateProfile: async (updates) => {
     const uid = userId();
 
     if (!IS_MOCK_MODE && supabase) {
-      try {
-        await supabase.from('profiles').update(updates).eq('id', uid);
-      } catch (error) {
-        console.warn('[EasyJob] updateProfile remote failed, saved locally.', error);
-      }
+      const { error } = await supabase.from('profiles').update(updates).eq('id', uid);
+      if (error) throw error;
     } else {
       await delay(200);
     }
 
     const updated = { ...get().currentUser, ...updates };
 
-    set({ currentUser: updated });
+    set((state) => ({
+      currentUser: updated,
+      profiles: upsertProfileList(state.profiles, updated),
+    }));
 
     const session = loadAuthSession();
     if (session?.profile) {
@@ -428,7 +572,74 @@ export const useAppStore = create<AppState>((set, get) => ({
     await useAuthStore.getState().subscribeToPro();
     const profile = useAuthStore.getState().profile;
     if (profile) {
-      set({ currentUser: profile });
+      set((state) => ({
+        currentUser: profile,
+        profiles: upsertProfileList(state.profiles, profile),
+      }));
     }
+  },
+
+  updateProfileById: async (id, updates) => {
+    if (!IS_MOCK_MODE && supabase) {
+      const { error } = await supabase.from('profiles').update(updates).eq('id', id);
+      if (error) throw error;
+    } else {
+      await delay(200);
+    }
+
+    set((state) => {
+      const profiles = state.profiles.map((p) => (p.id === id ? { ...p, ...updates } : p));
+      const currentUser = state.currentUser.id === id ? { ...state.currentUser, ...updates } : state.currentUser;
+      return { profiles, currentUser };
+    });
+
+    const session = loadAuthSession();
+    if (session?.profile?.id === id) {
+      const nextProfile = { ...session.profile, ...updates };
+      saveAuthSession(updateSessionProfile(session, nextProfile));
+      useAuthStore.setState({ profile: nextProfile });
+    }
+  },
+
+  adminActivateSubscription: async (targetPhone) => {
+    const normalized = normalizePhone(targetPhone);
+
+    let target: Profile | null =
+      get().profiles.find((p) => normalizePhone(p.phone) === normalized) ?? null;
+
+    if (!target && !IS_MOCK_MODE && supabase) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('phone', normalized)
+        .maybeSingle();
+      if (error) throw error;
+      target = data as Profile | null;
+    }
+
+    if (!target) {
+      target = findMockUserByPhone(normalized)?.profile ?? null;
+    }
+
+    if (!target) return null;
+
+    const activation = buildSubscriptionActivation(target);
+    const updated: Profile = { ...target, ...activation };
+
+    if (!IS_MOCK_MODE && supabase) {
+      const { error: rpcError } = await supabase.rpc('admin_activate_subscription', {
+        target_phone: normalized,
+      });
+      if (rpcError) {
+        const { error } = await supabase.from('profiles').update(activation).eq('id', target.id);
+        if (error) throw error;
+      }
+    } else {
+      updateMockUserProfileByPhone(normalized, activation);
+    }
+
+    await get().updateProfileById(target.id, activation);
+
+    return updated;
   },
 }));

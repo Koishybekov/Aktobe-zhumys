@@ -1,71 +1,42 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Profile, Job, JobApplication, Review, ChatMessage } from '@/types';
 
-const PLACEHOLDER_PATTERNS = [
-  'your-project',
-  'your-anon-key',
-  'example.com',
-  'placeholder',
-  'changeme',
-  'xxx',
-];
+/** Supabase project URL — set in `.env` as VITE_SUPABASE_URL */
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL ?? '').trim();
 
-function env(key: string): string {
-  return (import.meta.env[key] ?? '').trim();
-}
-
-const supabaseUrl = env('VITE_SUPABASE_URL');
-const supabaseAnonKey = env('VITE_SUPABASE_ANON_KEY');
-const mockFlag = env('VITE_USE_MOCK_DATA');
-
-/** True when URL/key look like real Supabase credentials (not empty or placeholder). */
-export function isValidSupabaseConfig(url: string, key: string): boolean {
-  if (!url || !key) return false;
-
-  const lowerUrl = url.toLowerCase();
-  const lowerKey = key.toLowerCase();
-
-  if (PLACEHOLDER_PATTERNS.some((p) => lowerUrl.includes(p) || lowerKey.includes(p))) {
-    return false;
-  }
-
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' && parsed.hostname.includes('.');
-  } catch {
-    return false;
-  }
-}
-
-const hasValidCredentials = isValidSupabaseConfig(supabaseUrl, supabaseAnonKey);
-
-/**
- * Use mock data when explicitly requested, credentials are missing/invalid,
- * or Supabase client creation fails.
- */
-export const USE_MOCK_DATA =
-  mockFlag === 'true' || mockFlag === '1' || !hasValidCredentials;
+/** Supabase anon / publishable key — set in `.env` as VITE_SUPABASE_ANON_KEY */
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
 
 function createSupabaseClient(): SupabaseClient | null {
-  if (USE_MOCK_DATA) return null;
-
-  try {
-    return createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    });
-  } catch (error) {
-    console.warn('[EasyJob] Supabase client init failed — using mock data.', error);
+  if (!supabaseUrl || !supabaseAnonKey) {
+    if (import.meta.env.DEV) {
+      console.warn(
+        '[EasyJob] Supabase not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env'
+      );
+    }
     return null;
   }
+
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  });
 }
 
 export const supabase = createSupabaseClient();
 
-/** Effective mock mode after client creation (covers init failure). */
-export const IS_MOCK_MODE = USE_MOCK_DATA || supabase === null;
+/** True when Supabase client could not be created (missing env vars). */
+export const IS_MOCK_MODE = supabase === null;
+
+/** @deprecated Use IS_MOCK_MODE — kept for backward compatibility */
+export const USE_MOCK_DATA = IS_MOCK_MODE;
+
+export function isValidSupabaseConfig(url: string, key: string): boolean {
+  return Boolean(url.trim() && key.trim());
+}
 
 export type Database = {
   public: {
@@ -80,9 +51,9 @@ export type Database = {
 };
 
 export function isSupabaseConfigured(): boolean {
-  return supabase !== null && !IS_MOCK_MODE;
+  return supabase !== null;
 }
 
-if (import.meta.env.DEV && IS_MOCK_MODE) {
-  console.info('[EasyJob] Running in mock data mode (Supabase not configured).');
+if (import.meta.env.DEV && supabase) {
+  console.info('[EasyJob] Supabase connected:', supabaseUrl);
 }

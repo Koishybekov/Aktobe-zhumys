@@ -17,6 +17,9 @@ export interface Profile {
   onboarding_completed?: boolean;
   is_pro?: boolean;
   pro_since?: string | null;
+  is_subscribed?: boolean;
+  subscribed_until?: string | null;
+  viewed_job_ids?: string[];
 }
 
 export interface Job {

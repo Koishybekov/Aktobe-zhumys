@@ -9,16 +9,19 @@ import { CreateJobPage } from '@/pages/CreateJobPage';
 import { MyJobsPage } from '@/pages/MyJobsPage';
 import { MessagesPage } from '@/pages/MessagesPage';
 import { ProfilePage } from '@/pages/ProfilePage';
-import { OnboardingPage } from '@/pages/OnboardingPage';
+import { AuthPage } from '@/pages/AuthPage';
 import { ProfileSetupPage } from '@/pages/ProfileSetupPage';
 import { PublicOfferPage } from '@/pages/PublicOfferPage';
+import { AdminPage } from '@/pages/AdminPage';
 import { useAppStore } from '@/store/useAppStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useLocaleStore } from '@/store/useLocaleStore';
 
 function AppBootstrap({ children }: { children: React.ReactNode }) {
-  const [authHydrated, setAuthHydrated] = useState(false);
+  const [bootstrapped, setBootstrapped] = useState(false);
   const hydrateAuth = useAuthStore((s) => s.hydrate);
+  const initAuthListener = useAuthStore((s) => s.initAuthListener);
+  const isHydrating = useAuthStore((s) => s.isHydrating);
   const hydrateLocale = useLocaleStore((s) => s.hydrate);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const onboardingCompleted = useAuthStore((s) => s.onboardingCompleted);
@@ -29,9 +32,10 @@ function AppBootstrap({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     hydrateLocale();
-    hydrateAuth();
-    setAuthHydrated(true);
-  }, [hydrateAuth, hydrateLocale]);
+    void hydrateAuth().finally(() => setBootstrapped(true));
+    const unsubscribe = initAuthListener();
+    return unsubscribe;
+  }, [hydrateAuth, hydrateLocale, initAuthListener]);
 
   useEffect(() => {
     if (isAuthenticated && onboardingCompleted) {
@@ -39,7 +43,7 @@ function AppBootstrap({ children }: { children: React.ReactNode }) {
     }
   }, [isAuthenticated, onboardingCompleted, initialize]);
 
-  if (!authHydrated) {
+  if (!bootstrapped || isHydrating) {
     return <AppLoadingScreen />;
   }
 
@@ -64,7 +68,7 @@ export default function App() {
               path="/auth"
               element={
                 <AuthRoute>
-                  <OnboardingPage />
+                  <AuthPage />
                 </AuthRoute>
               }
             />
@@ -77,6 +81,14 @@ export default function App() {
               }
             />
             <Route path="/offer" element={<PublicOfferPage />} />
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute>
+                  <AdminPage />
+                </ProtectedRoute>
+              }
+            />
             <Route
               element={
                 <ProtectedRoute>

@@ -13,13 +13,14 @@ import { formatPrice, getInitials } from '@/lib/utils';
 import { CATEGORY_COLORS } from '@/lib/constants';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { ProSubscriptionCard, ProSubscriptionModal } from '@/components/profile/ProSubscription';
+import { AdminLink } from '@/pages/AdminPage';
+import { hasProBadge } from '@/lib/subscription';
 
 export function ProfilePage() {
   const navigate = useNavigate();
-  const { currentUser, activeMode, setActiveMode, getMyClientJobs, getMyWorkerApplications, jobs, reviews, resetSession, subscribeToPro } =
+  const { currentUser, activeMode, setActiveMode, getMyClientJobs, getMyWorkerApplications, jobs, reviews } =
     useAppStore();
   const logout = useAuthStore((s) => s.logout);
-  const isSubmitting = useAuthStore((s) => s.isSubmitting);
   const offerAcceptedAt = useAuthStore((s) => s.offerAcceptedAt);
   const { t, category } = useTranslation();
   const { toast } = useToast();
@@ -42,17 +43,11 @@ export function ProfilePage() {
     toast({ title: t('switchedMode'), variant: 'success' });
   };
 
-  const handleLogout = () => {
-    logout();
-    resetSession();
+  const handleLogout = async () => {
+    useAppStore.getState().resetSession();
+    await logout();
     navigate('/auth', { replace: true });
     toast({ title: t('signedOut'), variant: 'default' });
-  };
-
-  const handleSubscribePro = async () => {
-    await subscribeToPro();
-    setProModalOpen(false);
-    toast({ title: t('proSuccess'), variant: 'success' });
   };
 
   const recentHistory = [
@@ -83,7 +78,7 @@ export function ProfilePage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-bold truncate">{currentUser.full_name || t('userFallback')}</h2>
-              {currentUser.is_pro && (
+              {hasProBadge(currentUser) && (
                 <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-400/90 px-2 py-0.5 text-[10px] font-bold text-indigo-900 shrink-0">
                   <Crown className="h-3 w-3" />
                   {t('proBadge')}
@@ -150,14 +145,15 @@ export function ProfilePage() {
         </CardContent>
       </Card>
 
-      <ProSubscriptionCard isPro={!!currentUser.is_pro} onOpenModal={() => setProModalOpen(true)} />
+      <ProSubscriptionCard profile={currentUser} onOpenModal={() => setProModalOpen(true)} />
 
       <ProSubscriptionModal
         open={proModalOpen}
         onClose={() => setProModalOpen(false)}
-        onSubscribe={handleSubscribePro}
-        isSubmitting={isSubmitting}
+        userPhone={currentUser.phone}
       />
+
+      <AdminLink />
 
       {(offerAcceptedAt || currentUser.offer_accepted_at) && (
         <Card>

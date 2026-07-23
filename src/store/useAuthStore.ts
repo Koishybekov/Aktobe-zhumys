@@ -1,204 +1,330 @@
 import { create } from 'zustand';
-import type { AuthStep, Profile, ProfileSetupInput, UserRole } from '@/types';
+import type { Profile, ProfileSetupInput, UserRole } from '@/types';
+import type { Session } from '@supabase/supabase-js';
 import { supabase, IS_MOCK_MODE } from '@/lib/supabase';
 import { DEFAULT_CITY } from '@/lib/constants';
-import { generateId } from '@/lib/utils';
 import { tStatic } from '@/lib/i18n/useTranslation';
 import { useLocaleStore } from '@/store/useLocaleStore';
+import {
+  normalizePhone,
+  isValidKzPhone,
+  phoneToAuthEmail,
+  isValidPassword,
+} from '@/lib/authPhone';
+import { subscriptionExpiresAt } from '@/lib/subscription';
 import {
   loadAuthSession,
   saveAuthSession,
   clearAuthSession,
-  createEmptyProfile,
+  updateSessionProfile,
 } from '@/lib/authStorage';
+import {
+  registerMockUser,
+  verifyMockLogin,
+  updateMockUserProfile,
+} from '@/lib/mockAuth';
 
 interface AuthState {
-  authStep: AuthStep;
   isAuthenticated: boolean;
   onboardingCompleted: boolean;
   pendingPhone: string;
-  draftFullName: string;
-  draftAvatar: string | null;
   selectedRole: UserRole;
-  offerAccepted: boolean;
   offerAcceptedAt: string | null;
   profile: Profile | null;
   isSubmitting: boolean;
+  isHydrating: boolean;
   error: string | null;
 
-  hydrate: () => void;
-  setAuthStep: (step: AuthStep) => void;
-  setSelectedRole: (role: UserRole) => void;
-  setOfferAccepted: (accepted: boolean) => void;
-  setDraftFullName: (name: string) => void;
-  setDraftAvatar: (url: string | null) => void;
-  setDraftPhone: (phone: string) => void;
-  submitProfileDraft: () => void;
-  acceptTermsAndSendOtp: () => Promise<void>;
-  verifyOtp: (code: string) => Promise<void>;
+  hydrate: () => Promise<void>;
+  initAuthListener: () => () => void;
+  register: (phone: string, password: string, confirmPassword: string) => Promise<void>;
+  login: (phone: string, password: string) => Promise<void>;
   completeProfileSetup: (input: ProfileSetupInput) => Promise<void>;
   subscribeToPro: () => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   getUserId: () => string;
-}
-
-function delay(ms = 400): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function normalizePhone(phone: string): string {
-  const digits = phone.replace(/\D/g, '');
-  if (digits.startsWith('8') && digits.length === 11) return '+7' + digits.slice(1);
-  if (digits.startsWith('7') && digits.length === 11) return '+' + digits;
-  if (digits.length === 10) return '+7' + digits;
-  return phone.trim();
-}
-
-function isValidKzPhone(phone: string): boolean {
-  const digits = phone.replace(/\D/g, '');
-  return (digits.startsWith('7') && digits.length === 11) || (digits.startsWith('8') && digits.length === 11);
 }
 
 function locale() {
   return useLocaleStore.getState().locale;
 }
 
+function applyAuthState(
+  profile: Profile,
+  phone: string,
+  offerAcceptedAt: string | null = profile.offer_accepted_at ?? null
+) {
+  const onboardingCompleted = !!profile.onboarding_completed;
+  saveAuthSession({
+    userId: profile.id,
+    phone,
+    role: profile.role,
+    isAuthenticated: true,
+    offerAcceptedAt,
+    onboardingCompleted,
+    profile,
+  });
+
+  return {
+    isAuthenticated: true,
+    onboardingCompleted,
+    pendingPhone: phone,
+    selectedRole: profile.role,
+    offerAcceptedAt,
+    profile,
+    error: null,
+  };
+}
+
+async function fetchProfile(userId: string): Promise<Profile | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+  if (error) {
+    console.warn('[Актобе Жұмыс] Profile fetch failed:', error.message);
+    return null;
+  }
+  return data as Profile | null;
+}
+
+async function syncFromSupabaseSession(session: Session): Promise<Partial<AuthState>> {
+  const phone =
+    (session.user.user_metadata?.phone as string | undefined) ??
+    session.user.phone ??
+    '';
+
+  let profile = await fetchProfile(session.user.id);
+
+  if (!profile) {
+    profile = {
+      id: session.user.id,
+      phone: normalizePhone(phone),
+      full_name: (session.user.user_metadata?.full_name as string) ?? '',
+      avatar_url: null,
+      role: ((session.user.user_metadata?.role as UserRole) ?? 'both') as UserRole,
+      rating: 0,
+      city: DEFAULT_CITY,
+      district: '',
+      skills: [],
+      offer_accepted_at: null,
+      onboarding_completed: false,
+    };
+  }
+
+  return applyAuthState(profile, profile.phone || normalizePhone(phone));
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
-  authStep: 'language',
   isAuthenticated: false,
   onboardingCompleted: false,
   pendingPhone: '',
-  draftFullName: '',
-  draftAvatar: null,
-  selectedRole: 'worker',
-  offerAccepted: false,
+  selectedRole: 'both',
   offerAcceptedAt: null,
   profile: null,
   isSubmitting: false,
+  isHydrating: true,
   error: null,
 
-  hydrate: () => {
-    const session = loadAuthSession();
-    if (!session?.isAuthenticated) {
+  hydrate: async () => {
+    set({ isHydrating: true, error: null });
+
+    try {
+      if (IS_MOCK_MODE || !supabase) {
+        const session = loadAuthSession();
+        if (session?.isAuthenticated && session.profile) {
+          set({
+            isAuthenticated: true,
+            onboardingCompleted: session.onboardingCompleted,
+            pendingPhone: session.phone,
+            selectedRole: session.role,
+            offerAcceptedAt: session.offerAcceptedAt,
+            profile: session.profile,
+            isHydrating: false,
+          });
+          return;
+        }
+        set({ isHydrating: false });
+        return;
+      }
+
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) throw error;
+
+      if (session?.user) {
+        const next = await syncFromSupabaseSession(session);
+        set({ ...next, isHydrating: false });
+        return;
+      }
+
+      clearAuthSession();
       set({
-        authStep: 'language',
         isAuthenticated: false,
         onboardingCompleted: false,
         profile: null,
+        isHydrating: false,
       });
-      return;
+    } catch (err) {
+      console.warn('[Актобе Жұмыс] Auth hydrate failed:', err);
+      const session = loadAuthSession();
+      if (session?.isAuthenticated && session.profile) {
+        set({
+          isAuthenticated: true,
+          onboardingCompleted: session.onboardingCompleted,
+          pendingPhone: session.phone,
+          selectedRole: session.role,
+          offerAcceptedAt: session.offerAcceptedAt,
+          profile: session.profile,
+          isHydrating: false,
+        });
+      } else {
+        set({ isHydrating: false });
+      }
     }
-
-    set({
-      isAuthenticated: true,
-      onboardingCompleted: session.onboardingCompleted,
-      pendingPhone: session.phone,
-      selectedRole: session.role,
-      offerAccepted: !!session.offerAcceptedAt,
-      offerAcceptedAt: session.offerAcceptedAt,
-      profile: session.profile,
-      draftFullName: session.profile?.full_name ?? '',
-      draftAvatar: session.profile?.avatar_url ?? null,
-      authStep: session.onboardingCompleted ? 'complete' : 'complete',
-    });
   },
 
-  setAuthStep: (step) => set({ authStep: step, error: null }),
-  setSelectedRole: (role) => set({ selectedRole: role }),
-  setOfferAccepted: (accepted) =>
-    set({
-      offerAccepted: accepted,
-      offerAcceptedAt: accepted ? new Date().toISOString() : null,
-    }),
-  setDraftFullName: (name) => set({ draftFullName: name }),
-  setDraftAvatar: (url) => set({ draftAvatar: url }),
-  setDraftPhone: (phone) => set({ pendingPhone: phone }),
+  initAuthListener: () => {
+    if (IS_MOCK_MODE || !supabase) return () => {};
 
-  submitProfileDraft: () => {
-    const { draftFullName, pendingPhone } = get();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        clearAuthSession();
+        set({
+          isAuthenticated: false,
+          onboardingCompleted: false,
+          profile: null,
+          pendingPhone: '',
+          error: null,
+        });
+        return;
+      }
+
+      if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) {
+        const next = await syncFromSupabaseSession(session);
+        set(next);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  },
+
+  register: async (phone, password, confirmPassword) => {
     const loc = locale();
+    const normalized = normalizePhone(phone);
 
-    if (!draftFullName.trim() || draftFullName.trim().length < 2) {
-      set({ error: tStatic('errName', loc) });
-      return;
-    }
-    const normalized = normalizePhone(pendingPhone);
     if (!isValidKzPhone(normalized)) {
       set({ error: tStatic('errPhone', loc) });
       return;
     }
-
-    set({ pendingPhone: normalized, error: null, authStep: 'terms' });
-  },
-
-  acceptTermsAndSendOtp: async () => {
-    const loc = locale();
-    if (!get().offerAccepted) {
-      set({ error: tStatic('errTerms', loc) });
+    if (!isValidPassword(password)) {
+      set({ error: tStatic('errPassword', loc) });
+      return;
+    }
+    if (password !== confirmPassword) {
+      set({ error: tStatic('errPasswordMatch', loc) });
       return;
     }
 
     set({ isSubmitting: true, error: null });
-    await delay(600);
-    set({ isSubmitting: false, authStep: 'otp' });
-  },
 
-  verifyOtp: async (code) => {
-    const loc = locale();
-    const trimmed = code.replace(/\D/g, '');
-    if (trimmed.length < 4) {
-      set({ error: tStatic('errCode', loc) });
-      return;
-    }
-
-    set({ isSubmitting: true, error: null });
-    await delay(800);
-
-    const { pendingPhone, selectedRole, offerAcceptedAt, draftFullName, draftAvatar } = get();
-    const userId = generateId();
-    const profile = createEmptyProfile(userId, pendingPhone, selectedRole);
-    profile.full_name = draftFullName.trim();
-    profile.avatar_url = draftAvatar;
-    profile.offer_accepted_at = offerAcceptedAt;
-    profile.city = DEFAULT_CITY;
-
-    const session = {
-      userId,
-      phone: pendingPhone,
-      role: selectedRole,
-      isAuthenticated: true,
-      offerAcceptedAt,
-      onboardingCompleted: false,
-      profile,
-    };
-
-    saveAuthSession(session);
-
-    if (!IS_MOCK_MODE && supabase) {
-      try {
-        await supabase.from('profiles').upsert({
-          id: userId,
-          phone: pendingPhone,
-          full_name: profile.full_name,
-          avatar_url: profile.avatar_url,
-          role: selectedRole,
-          offer_accepted_at: offerAcceptedAt,
-          onboarding_completed: false,
-          city: DEFAULT_CITY,
-          skills: [],
-        });
-      } catch (err) {
-        console.warn('[Актобе Жұмыс] Profile upsert failed, saved locally.', err);
+    try {
+      if (IS_MOCK_MODE || !supabase) {
+        try {
+          const record = registerMockUser(normalized, password);
+          const next = applyAuthState(record.profile, normalized);
+          set({ ...next, isSubmitting: false });
+        } catch {
+          set({ error: tStatic('errUserExists', loc), isSubmitting: false });
+        }
+        return;
       }
+
+      const email = phoneToAuthEmail(normalized);
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            phone: normalized,
+            full_name: '',
+            role: 'both',
+            city: DEFAULT_CITY,
+          },
+        },
+      });
+
+      if (error) {
+        if (error.message.toLowerCase().includes('already')) {
+          set({ error: tStatic('errUserExists', loc), isSubmitting: false });
+          return;
+        }
+        throw error;
+      }
+
+      if (!data.session && data.user) {
+        const signIn = await supabase.auth.signInWithPassword({ email, password });
+        if (signIn.error) throw signIn.error;
+        if (signIn.data.session) {
+          const next = await syncFromSupabaseSession(signIn.data.session);
+          set({ ...next, isSubmitting: false });
+          return;
+        }
+      }
+
+      if (data.session) {
+        await new Promise((r) => setTimeout(r, 400));
+        const next = await syncFromSupabaseSession(data.session);
+        set({ ...next, isSubmitting: false });
+        return;
+      }
+
+      set({ error: tStatic('errRegister', loc), isSubmitting: false });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : tStatic('error', loc);
+      set({ error: message, isSubmitting: false });
+    }
+  },
+
+  login: async (phone, password) => {
+    const loc = locale();
+    const normalized = normalizePhone(phone);
+
+    if (!isValidKzPhone(normalized)) {
+      set({ error: tStatic('errPhone', loc) });
+      return;
+    }
+    if (!password) {
+      set({ error: tStatic('errPasswordRequired', loc) });
+      return;
     }
 
-    set({
-      isAuthenticated: true,
-      onboardingCompleted: false,
-      profile,
-      authStep: 'complete',
-      isSubmitting: false,
-    });
+    set({ isSubmitting: true, error: null });
+
+    try {
+      if (IS_MOCK_MODE || !supabase) {
+        const record = verifyMockLogin(normalized, password);
+        if (!record) {
+          set({ error: tStatic('errInvalidCredentials', loc), isSubmitting: false });
+          return;
+        }
+        const next = applyAuthState(record.profile, normalized, record.profile.offer_accepted_at ?? null);
+        set({ ...next, isSubmitting: false });
+        return;
+      }
+
+      const email = phoneToAuthEmail(normalized);
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        set({ error: tStatic('errInvalidCredentials', loc), isSubmitting: false });
+        return;
+      }
+
+      if (data.session) {
+        const next = await syncFromSupabaseSession(data.session);
+        set({ ...next, isSubmitting: false });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : tStatic('error', loc);
+      set({ error: message, isSubmitting: false });
+    }
   },
 
   completeProfileSetup: async (input) => {
@@ -224,50 +350,37 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       city: input.city || DEFAULT_CITY,
       district: input.district,
       skills: input.skills,
+      role: selectedRole,
       offer_accepted_at: offerAcceptedAt,
       onboarding_completed: true,
       rating: profile.rating || 5.0,
     };
 
-    const session = {
-      userId: profile.id,
-      phone: pendingPhone,
-      role: selectedRole,
-      isAuthenticated: true,
-      offerAcceptedAt,
-      onboardingCompleted: true,
-      profile: completedProfile,
-    };
-
-    saveAuthSession(session);
-
-    if (!IS_MOCK_MODE && supabase) {
-      try {
-        await supabase.from('profiles').upsert({
-          id: profile.id,
-          phone: pendingPhone,
+    try {
+      if (!IS_MOCK_MODE && supabase) {
+        const { error } = await supabase.from('profiles').update({
           full_name: completedProfile.full_name,
           avatar_url: completedProfile.avatar_url,
-          role: selectedRole,
           city: completedProfile.city,
           district: completedProfile.district,
           skills: completedProfile.skills,
+          role: selectedRole,
           offer_accepted_at: offerAcceptedAt,
           onboarding_completed: true,
-        });
-      } catch (err) {
-        console.warn('[Актобе Жұмыс] Profile setup sync failed.', err);
-      }
-    } else {
-      await delay(400);
-    }
+        }).eq('id', profile.id);
 
-    set({
-      profile: completedProfile,
-      onboardingCompleted: true,
-      authStep: 'complete',
-      isSubmitting: false,
-    });
+        if (error) throw error;
+      } else {
+        updateMockUserProfile(profile.id, completedProfile);
+      }
+
+      const next = applyAuthState(completedProfile, pendingPhone || profile.phone, offerAcceptedAt);
+      set({ ...next, isSubmitting: false });
+    } catch (err) {
+      console.warn('[Актобе Жұмыс] Profile setup sync failed.', err);
+      const next = applyAuthState(completedProfile, pendingPhone || profile.phone, offerAcceptedAt);
+      set({ ...next, isSubmitting: false });
+    }
   },
 
   subscribeToPro: async () => {
@@ -275,39 +388,42 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!profile || profile.is_pro) return;
 
     set({ isSubmitting: true, error: null });
-    await delay(800);
 
     const proProfile: Profile = {
       ...profile,
+      is_subscribed: true,
+      subscribed_until: subscriptionExpiresAt(),
       is_pro: true,
       pro_since: new Date().toISOString(),
     };
 
-    const session = loadAuthSession();
-    if (session) {
-      saveAuthSession({
-        ...session,
-        profile: proProfile,
-      });
+    if (!IS_MOCK_MODE && supabase) {
+      await supabase.from('profiles').update({
+        is_subscribed: true,
+        subscribed_until: proProfile.subscribed_until,
+        is_pro: true,
+        pro_since: proProfile.pro_since,
+      }).eq('id', profile.id);
     }
 
-    set({
-      profile: proProfile,
-      isSubmitting: false,
-    });
+    const session = loadAuthSession();
+    if (session) {
+      saveAuthSession(updateSessionProfile(session, proProfile));
+    }
+
+    set({ profile: proProfile, isSubmitting: false });
   },
 
-  logout: () => {
+  logout: async () => {
+    if (!IS_MOCK_MODE && supabase) {
+      await supabase.auth.signOut();
+    }
     clearAuthSession();
     set({
-      authStep: 'language',
       isAuthenticated: false,
       onboardingCompleted: false,
       pendingPhone: '',
-      draftFullName: '',
-      draftAvatar: null,
-      selectedRole: 'worker',
-      offerAccepted: false,
+      selectedRole: 'both',
       offerAcceptedAt: null,
       profile: null,
       error: null,
