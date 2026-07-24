@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Phone, Lock, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { Phone, Lock, ArrowRight, Eye, EyeOff, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -28,6 +28,7 @@ export function AuthPage() {
 
   const [tab, setTab] = useState<'login' | 'register'>('login');
   const [phone, setPhone] = useState('');
+  const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -43,7 +44,7 @@ export function AuthPage() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!termsAccepted) return;
-    await register(phone, password, confirmPassword);
+    await register(phone, password, confirmPassword, fullName);
     const state = useAuthStore.getState();
     if (state.isAuthenticated) {
       const done = state.onboardingCompleted || isOnboardingCompletedLocal();
@@ -165,7 +166,25 @@ export function AuthPage() {
           <TabsContent value="register">
             <form onSubmit={handleRegister} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="reg-phone">{t('phoneNumber')}</Label>
+                <Label htmlFor="reg-fullname">{t('fullName')} *</Label>
+                <div className="relative">
+                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <Input
+                    id="reg-fullname"
+                    type="text"
+                    placeholder={t('fullNamePlaceholder')}
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    className="pl-10"
+                    autoComplete="name"
+                    required
+                    minLength={2}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="reg-phone">{t('phoneNumber')} *</Label>
                 <div className="relative">
                   <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <Input
@@ -181,7 +200,7 @@ export function AuthPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="reg-password">{t('password')}</Label>
+                <Label htmlFor="reg-password">{t('password')} *</Label>
                 <div className="relative">
                   <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <Input

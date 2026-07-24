@@ -32,7 +32,7 @@ export function findMockUserByPhone(phone: string): MockUserRecord | undefined {
   return loadMockUsers().find((u) => u.phone === normalized);
 }
 
-export function registerMockUser(phone: string, password: string): MockUserRecord {
+export function registerMockUser(phone: string, password: string, fullName = ''): MockUserRecord {
   const normalized = normalizePhone(phone);
   const users = loadMockUsers();
   if (users.some((u) => u.phone === normalized)) {
@@ -41,7 +41,7 @@ export function registerMockUser(phone: string, password: string): MockUserRecor
 
   const id = generateId();
   const profile = createEmptyProfile(id, normalized, 'both');
-  profile.full_name = '';
+  profile.full_name = fullName.trim();
   profile.city = DEFAULT_CITY;
 
   const record: MockUserRecord = { id, phone: normalized, password, profile };

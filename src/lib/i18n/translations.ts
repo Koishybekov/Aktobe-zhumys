@@ -265,6 +265,7 @@ export const translations = {
 
     // Errors
     errPhone: 'Введите корректный номер (+7 7XX XXX XXXX)',
+    errFullName: 'Введите имя и фамилию',
     errTerms: 'Примите публичную оферту',
     errName: 'Введите имя (мин. 2 символа)',
     errCode: 'Введите 4-значный код',
@@ -546,6 +547,7 @@ export const translations = {
     switchedMode: 'Режим өзгертildi',
 
     errPhone: 'Дұрыс нөмір енгізіңіз (+7 7XX XXX XXXX)',
+    errFullName: 'Аты-жөніңізді енгізіңіз',
     errTerms: 'Жария офертаны қабылдаңыз',
     errName: 'Аты-жөнді енгізіңіз (мин. 2 символ)',
     errCode: '4 сандық код енгізіңіз',

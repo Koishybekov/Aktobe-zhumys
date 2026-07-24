@@ -51,7 +51,7 @@ interface AuthState {
 
   hydrate: () => Promise<void>;
   initAuthListener: () => () => void;
-  register: (phone: string, password: string, confirmPassword: string) => Promise<void>;
+  register: (phone: string, password: string, confirmPassword: string, fullName: string) => Promise<void>;
   login: (phone: string, password: string) => Promise<void>;
   completeProfileSetup: (input: ProfileSetupInput) => Promise<boolean>;
   subscribeToPro: () => Promise<void>;
@@ -126,8 +126,12 @@ async function signInWithPhoneCredentials(normalized: string, password: string) 
   return primary;
 }
 
-/** Register via anonymous Supabase session — no email / SMTP / rate limits. */
-async function registerWithPhoneProfile(normalized: string, password: string): Promise<Session> {
+/** Register with Supabase Auth (phone → synthetic email + password). */
+async function registerWithPhoneProfile(
+  normalized: string,
+  password: string,
+  fullName: string
+): Promise<Session> {
   if (!supabase) throw new Error('Supabase not configured');
 
   const { data: exists, error: existsErr } = await supabase.rpc('phone_exists', {
@@ -136,81 +140,134 @@ async function registerWithPhoneProfile(normalized: string, password: string): P
   if (existsErr) throw existsErr;
   if (exists) throw new Error('USER_EXISTS');
 
-  await supabase.auth.signOut();
+  const email = phoneToAuthEmail(normalized);
 
-  const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
-  if (anonErr) throw anonErr;
-  if (!anonData.session) throw new Error('Anonymous session failed');
+  const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        phone: normalized,
+        full_name: fullName.trim(),
+        role: 'both',
+        city: DEFAULT_CITY,
+      },
+    },
+  });
 
-  const session = anonData.session;
+  if (signUpErr) {
+    const msg = signUpErr.message.toLowerCase();
+    if (msg.includes('already') || msg.includes('registered') || msg.includes('exists')) {
+      throw new Error('USER_EXISTS');
+    }
+    throw signUpErr;
+  }
+
+  let session = signUpData.session;
+
+  if (!session) {
+    const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    if (signInErr || !signInData.session) {
+      throw signInErr ?? new Error('Registration succeeded but session unavailable');
+    }
+    session = signInData.session;
+  }
+
+  const userId = session.user.id;
   const passwordHash = await hashPassword(password);
 
   const { error: profileErr } = await supabase.from('profiles').upsert(
     {
-      id: session.user.id,
+      id: userId,
       phone: normalized,
       password_hash: passwordHash,
-      full_name: '',
+      full_name: fullName.trim(),
       role: 'both',
       city: DEFAULT_CITY,
       onboarding_completed: false,
     },
     { onConflict: 'id' }
   );
-  if (profileErr) throw profileErr;
+  if (profileErr) {
+    console.error('Profile link error after signUp:', profileErr);
+  }
 
   savePhoneSession(normalized, session);
   return session;
 }
 
-/** Login with phone + password hash in profiles; restores saved Supabase session. */
+/** Ensure profiles row exists and matches auth.users id. */
+async function linkProfileToAuthUser(
+  userId: string,
+  phone: string,
+  fullName?: string
+): Promise<void> {
+  if (!supabase) return;
+
+  const existing = await fetchProfile(userId);
+  const { error } = await supabase.from('profiles').upsert(
+    {
+      id: userId,
+      phone: phone || existing?.phone || '',
+      full_name: fullName?.trim() || existing?.full_name || '',
+      role: existing?.role ?? 'both',
+      city: existing?.city ?? DEFAULT_CITY,
+      onboarding_completed: existing?.onboarding_completed ?? false,
+    },
+    { onConflict: 'id' }
+  );
+  if (error) {
+    console.warn('[Актобе Жұмыс] Profile link failed:', error.message);
+  }
+}
+
+/** Login with phone + password via Supabase Auth email credentials. */
 async function loginWithPhoneProfile(normalized: string, password: string): Promise<Session | null> {
   if (!supabase) throw new Error('Supabase not configured');
 
-  const passwordHash = await hashPassword(password);
-  const { data: userId, error: verifyErr } = await supabase.rpc('verify_phone_password', {
-    p_phone: normalized,
-    p_password_hash: passwordHash,
-  });
-  if (verifyErr) throw verifyErr;
-
-  if (userId) {
-    const stored = loadPhoneSession(normalized);
-    if (stored && stored.userId === userId) {
-      const { data, error } = await supabase.auth.setSession({
-        access_token: stored.access_token,
-        refresh_token: stored.refresh_token,
-      });
-      if (!error && data.session?.user.id === userId) {
-        savePhoneSession(normalized, data.session!);
-        return data.session;
-      }
+  const stored = loadPhoneSession(normalized);
+  if (stored) {
+    const { data, error } = await supabase.auth.setSession({
+      access_token: stored.access_token,
+      refresh_token: stored.refresh_token,
+    });
+    if (!error && data.session) {
+      savePhoneSession(normalized, data.session);
+      await linkProfileToAuthUser(
+        data.session.user.id,
+        normalized,
+        data.session.user.user_metadata?.full_name as string | undefined
+      );
+      return data.session;
     }
   }
 
-  // Legacy accounts created via email signUp (no email sent on sign-in)
-  const legacy = await signInWithPhoneCredentials(normalized, password);
-  if (legacy.error || !legacy.data.session) return null;
+  const authResult = await signInWithPhoneCredentials(normalized, password);
+  if (authResult.error || !authResult.data.session) return null;
 
-  savePhoneSession(normalized, legacy.data.session);
+  const session = authResult.data.session;
+  savePhoneSession(normalized, session);
 
-  if (userId && legacy.data.session.user.id === userId) {
-    return legacy.data.session;
-  }
+  await linkProfileToAuthUser(
+    session.user.id,
+    normalized,
+    session.user.user_metadata?.full_name as string | undefined
+  );
 
-  // Migrate legacy session: store password hash for phone auth next time
-  if (legacy.data.session.user.id) {
-    await supabase.from('profiles').upsert(
-      {
-        id: legacy.data.session.user.id,
-        phone: normalized,
-        password_hash: passwordHash,
-      },
-      { onConflict: 'id' }
-    );
-  }
+  const passwordHash = await hashPassword(password);
+  await supabase.from('profiles').upsert(
+    {
+      id: session.user.id,
+      phone: normalized,
+      password_hash: passwordHash,
+    },
+    { onConflict: 'id' }
+  );
 
-  return legacy.data.session;
+  return session;
 }
 
 async function syncFromSupabaseSession(session: Session): Promise<Partial<AuthState>> {
@@ -432,12 +489,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     return () => subscription.unsubscribe();
   },
 
-  register: async (phone, password, confirmPassword) => {
+  register: async (phone, password, confirmPassword, fullName) => {
     const loc = locale();
     const normalized = normalizePhone(phone);
+    const name = fullName.trim();
 
     if (!isValidKzPhone(normalized)) {
       set({ error: tStatic('errPhone', loc) });
+      return;
+    }
+    if (!name || name.length < 2) {
+      set({ error: tStatic('errFullName', loc) });
       return;
     }
     if (!isValidPassword(password)) {
@@ -454,7 +516,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       if (IS_MOCK_MODE || !supabase) {
         try {
-          const record = registerMockUser(normalized, password);
+          const record = registerMockUser(normalized, password, name);
           const next = applyAuthState(record.profile, normalized);
           set({ ...next, isSubmitting: false });
         } catch {
@@ -463,7 +525,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
-      const session = await registerWithPhoneProfile(normalized, password);
+      const session = await registerWithPhoneProfile(normalized, password, name);
       const next = await syncFromSupabaseSession(session);
       set({ ...next, isSubmitting: false });
     } catch (err) {
