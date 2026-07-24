@@ -11,7 +11,7 @@ import type {
   ReviewInput,
 } from '@/types';
 import { supabase, IS_MOCK_MODE } from '@/lib/supabase';
-import { DEFAULT_CITY } from '@/lib/constants';
+import { filterOpenJobs } from '@/lib/jobFilters';
 import { generateId } from '@/lib/utils';
 import { loadAuthSession, saveAuthSession, updateSessionProfile } from '@/lib/authStorage';
 import { getActiveUserId, useAuthStore } from '@/store/useAuthStore';
@@ -374,21 +374,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   getOpenJobs: () => {
     const { jobs, selectedDistrict, selectedCategory, searchQuery } = get();
-    return jobs.filter((job) => {
-      if (job.status && job.status.toLowerCase() !== 'open') return false;
-      if (selectedDistrict !== 'all' && job.district && job.district !== selectedDistrict) return false;
-      if (selectedCategory !== 'all' && job.category !== selectedCategory) return false;
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        return (
-          job.title.toLowerCase().includes(q) ||
-          (job.company?.toLowerCase().includes(q) ?? false) ||
-          job.description.toLowerCase().includes(q) ||
-          (job.location_address?.toLowerCase().includes(q) ?? false)
-        );
-      }
-      return true;
-    });
+    return filterOpenJobs(jobs, { selectedCategory, selectedDistrict, searchQuery });
   },
 
   getProfile: (id) => {

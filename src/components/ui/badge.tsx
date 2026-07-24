@@ -36,6 +36,9 @@ export function StatusBadge({ status }: { status: string }) {
 }
 
 export function StarRating({ rating, size = 'sm' }: { rating: number; size?: 'sm' | 'md' }) {
+  const safeRating =
+    typeof rating === 'number' && !Number.isNaN(rating) ? rating : Number(rating) || 0;
+
   return (
     <div className="flex items-center gap-0.5">
       {Array.from({ length: 5 }).map((_, i) => (
@@ -43,7 +46,7 @@ export function StarRating({ rating, size = 'sm' }: { rating: number; size?: 'sm
           key={i}
           className={cn(
             size === 'sm' ? 'w-3.5 h-3.5' : 'w-5 h-5',
-            i < Math.floor(rating) ? 'text-amber-400 fill-amber-400' : 'text-gray-200 fill-gray-200'
+            i < Math.floor(safeRating) ? 'text-amber-400 fill-amber-400' : 'text-gray-200 fill-gray-200'
           )}
           viewBox="0 0 20 20"
         >
@@ -51,7 +54,7 @@ export function StarRating({ rating, size = 'sm' }: { rating: number; size?: 'sm
         </svg>
       ))}
       <span className={cn('ml-1 text-gray-600 font-medium', size === 'sm' ? 'text-xs' : 'text-sm')}>
-        {rating.toFixed(1)}
+        {safeRating.toFixed(1)}
       </span>
     </div>
   );

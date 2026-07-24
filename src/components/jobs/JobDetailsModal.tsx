@@ -14,13 +14,36 @@ import { openWhatsApp } from '@/lib/whatsapp';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import type { Job, Profile } from '@/types';
 
+type JobWithProfiles = Job & {
+  profiles?: Profile | Profile[] | null;
+};
+
 interface JobDetailsModalProps {
   job: Job | null;
-  client?: Profile;
+  client?: Profile | null;
   open: boolean;
   onClose: () => void;
   onApply?: () => void;
   hasApplied?: boolean;
+}
+
+function resolveNestedProfile(job: JobWithProfiles, client?: Profile | null): Profile | null {
+  if (client?.id || client?.full_name || client?.phone) return client;
+
+  const nested = job.profiles;
+  if (Array.isArray(nested)) return nested[0] ?? null;
+  if (nested && typeof nested === 'object') return nested;
+
+  return null;
+}
+
+function safeRelativeTime(dateString: string | undefined | null, fallback: string): string {
+  if (!dateString) return fallback;
+  try {
+    return formatRelativeTime(dateString);
+  } catch {
+    return fallback;
+  }
 }
 
 export function JobDetailsModal({
@@ -35,11 +58,25 @@ export function JobDetailsModal({
 
   if (!job) return null;
 
-  const contactPhone = job.phone ?? client?.phone;
+  const jobRecord = job as JobWithProfiles;
+  const profile = resolveNestedProfile(jobRecord, client ?? null);
+
+  const title = job.title?.trim() || t('notSpecified');
+  const description = job.description?.trim() || t('notSpecified');
+  const company = job.company?.trim() || '';
+  const city = job.city?.trim() || t('notSpecified');
+  const district = job.district?.trim() || '';
+  const locationLabel = district ? `${city} · ${district}` : city;
+  const jobCategory = job.category?.trim() || '';
+  const categoryLabel = jobCategory ? category(jobCategory) : t('notSpecified');
+
+  const contactPhone = job.phone?.trim() || profile?.phone?.trim() || '';
+  const clientName = profile?.full_name?.trim() || t('userFallback');
+  const clientRating = typeof profile?.rating === 'number' ? profile.rating : Number(profile?.rating) || 0;
 
   const handleWhatsApp = () => {
     if (!contactPhone) return;
-    const message = `${t('whatsappMessage')} "${job.title}"`;
+    const message = `${t('whatsappMessage')} "${title}"`;
     openWhatsApp(contactPhone, message);
   };
 
@@ -49,51 +86,49 @@ export function JobDetailsModal({
         <div className="p-6 pb-4">
           <DialogHeader>
             <div className="flex items-start gap-2 mb-2">
-              <Badge category={job.category}>{category(job.category)}</Badge>
-              <span className="text-xs text-gray-400 ml-auto">{job.city}{job.district ? ` · ${job.district}` : ''}</span>
+              <Badge category={jobCategory || undefined}>{categoryLabel}</Badge>
+              <span className="text-xs text-gray-400 ml-auto">{locationLabel}</span>
             </div>
-            <DialogTitle className="text-xl text-left">{job.title}</DialogTitle>
-            {job.company && (
-              <p className="text-sm text-gray-500 text-left mt-0.5">{job.company}</p>
-            )}
+            <DialogTitle className="text-xl text-left">{title}</DialogTitle>
+            {company && <p className="text-sm text-gray-500 text-left mt-0.5">{company}</p>}
             <DialogDescription className="text-left text-emerald-600 font-bold text-2xl mt-1">
               {formatPrice(getJobSalary(job))}
             </DialogDescription>
           </DialogHeader>
 
           <div className="mt-4 space-y-3">
-            <p className="text-sm text-gray-600 leading-relaxed">{job.description}</p>
+            <p className="text-sm text-gray-600 leading-relaxed">{description}</p>
 
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <MapPin className="h-4 w-4 shrink-0 text-emerald-500" />
-              {job.city}
-            </div>
-            {contactPhone && (
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <MessageCircle className="h-4 w-4 shrink-0 text-emerald-500" />
-                {contactPhone}
-              </div>
-            )}
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <Clock className="h-4 w-4 shrink-0 text-emerald-500" />
-              {t('posted')} {formatRelativeTime(job.created_at)}
+              {locationLabel}
             </div>
 
-            {client && (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <MessageCircle className="h-4 w-4 shrink-0 text-emerald-500" />
+              {contactPhone || t('notSpecified')}
+            </div>
+
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Clock className="h-4 w-4 shrink-0 text-emerald-500" />
+              {t('posted')} {safeRelativeTime(job.created_at, t('notSpecified'))}
+            </div>
+
+            {profile && (
               <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 mt-2">
                 <Avatar>
-                  {client.avatar_url ? (
-                    <AvatarImage src={client.avatar_url} alt={client.full_name} />
+                  {profile.avatar_url ? (
+                    <AvatarImage src={profile.avatar_url} alt={clientName} />
                   ) : (
-                    <AvatarFallback>{getInitials(client.full_name)}</AvatarFallback>
+                    <AvatarFallback>{getInitials(clientName)}</AvatarFallback>
                   )}
                 </Avatar>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <User className="h-3.5 w-3.5 text-gray-400" />
-                    <span className="text-sm font-medium text-gray-900 truncate">{client.full_name}</span>
+                    <span className="text-sm font-medium text-gray-900 truncate">{clientName}</span>
                   </div>
-                  <StarRating rating={client.rating} />
+                  <StarRating rating={clientRating} />
                 </div>
               </div>
             )}
