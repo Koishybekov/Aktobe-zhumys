@@ -89,6 +89,7 @@ export const translations = {
     posted: 'Опубликовано',
     whatsappContact: 'Написать в WhatsApp',
     whatsappMessage: 'Здравствуйте! Меня заинтересовала ваша работа:',
+    noContactPhone: 'Отклик сохранён. Контактный номер не указан — напишите через WhatsApp-кнопку выше, если доступна.',
 
     // Create job
     postJob: 'Разместить работу',
@@ -387,6 +388,7 @@ export const translations = {
     posted: 'Жарияланған',
     whatsappContact: 'WhatsApp-пен байланысу',
     whatsappMessage: 'Сәлеметсіз бе! Менің қызығушылығым:',
+    noContactPhone: 'Жауап сақталды. Байланыс телефоны көрсетілмеген — WhatsApp батырмасын пайдаланыңыз.',
 
     postJob: 'Жұмыс орналастыру',
     postJobDesc: 'Тапсырмаңызға орындаушы табыңыз',

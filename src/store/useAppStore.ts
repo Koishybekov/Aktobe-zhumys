@@ -417,6 +417,37 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   applyToJob: async (jobId) => {
     const uid = userId();
+    if (!uid) throw new Error('Not authenticated');
+    if (get().hasApplied(jobId)) return;
+
+    const payload = {
+      job_id: jobId,
+      worker_id: uid,
+      status: 'pending' as const,
+    };
+
+    if (!IS_MOCK_MODE && supabase) {
+      const { data, error } = await supabase
+        .from('job_applications')
+        .insert(payload)
+        .select()
+        .single();
+
+      if (error) {
+        if (error.code === '23505') return;
+        throw error;
+      }
+
+      if (data) {
+        set((state) => ({
+          applications: state.applications.some((a) => a.id === data.id)
+            ? state.applications
+            : [...state.applications, data as JobApplication],
+        }));
+      }
+      return;
+    }
+
     const newApp: JobApplication = {
       id: generateId(),
       job_id: jobId,
@@ -425,16 +456,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       created_at: new Date().toISOString(),
     };
 
-    if (!IS_MOCK_MODE && supabase) {
-      const { data, error } = await supabase.from('job_applications').insert(newApp).select().single();
-      if (error) throw error;
-      if (data) newApp.id = data.id;
-    } else {
-      await delay(300);
-    }
+    await delay(300);
 
     set((state) => ({
-      applications: state.applications.some((a) => a.id === newApp.id)
+      applications: state.applications.some(
+        (a) => a.job_id === jobId && a.worker_id === uid
+      )
         ? state.applications
         : [...state.applications, newApp],
     }));

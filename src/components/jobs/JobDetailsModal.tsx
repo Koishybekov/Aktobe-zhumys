@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Badge, StarRating } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { formatPrice, formatRelativeTime, getInitials, getJobSalary } from '@/lib/utils';
-import { openWhatsApp } from '@/lib/whatsapp';
+import { resolveJobContactPhone, openJobWhatsAppContact } from '@/lib/jobContact';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { ProBadge } from '@/components/profile/ProBadge';
 import type { Job, Profile } from '@/types';
@@ -24,7 +24,7 @@ interface JobDetailsModalProps {
   client?: Profile | null;
   open: boolean;
   onClose: () => void;
-  onApply?: () => void;
+  onApply?: () => void | Promise<void>;
   hasApplied?: boolean;
 }
 
@@ -71,14 +71,16 @@ export function JobDetailsModal({
   const jobCategory = job.category?.trim() || '';
   const categoryLabel = jobCategory ? category(jobCategory) : t('notSpecified');
 
-  const contactPhone = job.phone?.trim() || profile?.phone?.trim() || '';
+  const contactPhone = resolveJobContactPhone(job, profile);
   const clientName = profile?.full_name?.trim() || t('userFallback');
   const clientRating = typeof profile?.rating === 'number' ? profile.rating : Number(profile?.rating) || 0;
 
   const handleWhatsApp = () => {
-    if (!contactPhone) return;
-    const message = `${t('whatsappMessage')} "${title}"`;
-    openWhatsApp(contactPhone, message);
+    openJobWhatsAppContact(job, profile, t('whatsappMessage'));
+  };
+
+  const handleApplyClick = () => {
+    void onApply?.();
   };
 
   return (
@@ -155,7 +157,7 @@ export function JobDetailsModal({
               size="lg"
               variant={hasApplied ? 'secondary' : 'default'}
               disabled={hasApplied}
-              onClick={onApply}
+              onClick={handleApplyClick}
             >
               {hasApplied ? t('applicationSent') : t('applyForJob')}
             </Button>

@@ -12,7 +12,8 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAppStore } from '@/store/useAppStore';
 import { getActiveUserId, useAuthStore } from '@/store/useAuthStore';
 import { useTranslation } from '@/lib/i18n/useTranslation';
-import { hasActiveSubscription } from '@/lib/subscription';
+import { hasActiveSubscription, isProActive } from '@/lib/subscription';
+import { openJobWhatsAppContact } from '@/lib/jobContact';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import {
   tryRecordJobView,
@@ -41,7 +42,7 @@ export function ExplorePage() {
   const hasApplied = useAppStore((s) => s.hasApplied);
   const getProfile = useAppStore((s) => s.getProfile);
   const getOpenJobs = useAppStore((s) => s.getOpenJobs);
-  const isPro = useAuthStore((s) => s.isPro);
+  const authProfile = useAuthStore((s) => s.profile);
   const refreshProfile = useAuthStore((s) => s.refreshProfile);
 
   const { toast } = useToast();
@@ -112,16 +113,35 @@ export function ExplorePage() {
   const handleApply = async (job: Job) => {
     if (hasApplied(job.id)) return;
 
-    if (!isPro) {
+    const profile = authProfile ?? currentUser;
+    const proActive = isProActive(profile);
+
+    if (!proActive) {
       openPaywall('apply');
       return;
     }
 
+    const client = getProfile(job.client_id);
+
     try {
       await applyToJob(job.id);
-      toast({ title: t('applicationSentToast'), description: t('applicationSentDesc'), variant: 'success' });
-    } catch {
-      toast({ title: t('error'), variant: 'error' });
+    } catch (err) {
+      console.warn('[Apply] Failed to save application:', err);
+    }
+
+    const opened = openJobWhatsAppContact(job, client, t('whatsappMessage'));
+    if (opened) {
+      toast({
+        title: t('applicationSentToast'),
+        description: t('applicationSentDesc'),
+        variant: 'success',
+      });
+    } else {
+      toast({
+        title: t('applicationSentToast'),
+        description: t('noContactPhone'),
+        variant: 'default',
+      });
     }
   };
 

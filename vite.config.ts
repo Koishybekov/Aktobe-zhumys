@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
+      includeAssets: ['favicon.svg', 'app-icon.svg'],
       manifest: {
         name: 'Актобе Жұмыс',
         short_name: 'Актобе Жұмыс',
@@ -20,9 +20,22 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
+            src: '/app-icon.svg',
+            sizes: '512x512',
+            type: 'image/svg+xml',
+            purpose: 'any',
+          },
+          {
+            src: '/app-icon.svg',
+            sizes: '512x512',
+            type: 'image/svg+xml',
+            purpose: 'maskable',
+          },
+          {
             src: '/favicon.svg',
             sizes: '192x192',
             type: 'image/svg+xml',
+            purpose: 'any',
           },
         ],
       },
