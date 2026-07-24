@@ -266,6 +266,7 @@ export const translations = {
     errPasswordMatch: 'Пароли не совпадают',
     errPasswordRequired: 'Введите пароль',
     errInvalidCredentials: 'Неверный телефон или пароль',
+    errInvalidEmail: 'Некорректный формат телефона для регистрации',
     errUserExists: 'Аккаунт с этим номером уже существует',
     errRegister: 'Не удалось зарегистрироваться. Попробуйте войти.',
 
@@ -537,6 +538,7 @@ export const translations = {
     errPasswordMatch: 'Құпия сөздер сәйкес келмейді',
     errPasswordRequired: 'Құпия сөзді енгізіңіз',
     errInvalidCredentials: 'Телефон немесе құпия сөз қате',
+    errInvalidEmail: 'Тіркелу үшін телефон форматы дұрыс емес',
     errUserExists: 'Бұл нөмірмен аккаунт бар',
     errRegister: 'Тіркелу сәтсіз. Кіруді көріңіз.',
 

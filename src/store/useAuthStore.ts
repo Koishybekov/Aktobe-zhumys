@@ -9,8 +9,15 @@ import {
   normalizePhone,
   isValidKzPhone,
   phoneToAuthEmail,
+  phoneToAuthEmailLegacy,
   isValidPassword,
 } from '@/lib/authPhone';
+import { hashPassword } from '@/lib/phoneAuth';
+import {
+  savePhoneSession,
+  loadPhoneSession,
+  clearPhoneSession,
+} from '@/lib/phoneSessionStorage';
 import { subscriptionExpiresAt } from '@/lib/subscription';
 import {
   loadAuthSession,
@@ -86,6 +93,109 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
   return data as Profile | null;
 }
 
+async function signInWithPhoneCredentials(normalized: string, password: string) {
+  if (!supabase) throw new Error('Supabase not configured');
+
+  const primaryEmail = phoneToAuthEmail(normalized);
+  const primary = await supabase.auth.signInWithPassword({ email: primaryEmail, password });
+  if (!primary.error) return primary;
+
+  const legacyEmail = phoneToAuthEmailLegacy(normalized);
+  if (legacyEmail !== primaryEmail) {
+    const legacy = await supabase.auth.signInWithPassword({ email: legacyEmail, password });
+    if (!legacy.error) return legacy;
+  }
+
+  return primary;
+}
+
+/** Register via anonymous Supabase session — no email / SMTP / rate limits. */
+async function registerWithPhoneProfile(normalized: string, password: string): Promise<Session> {
+  if (!supabase) throw new Error('Supabase not configured');
+
+  const { data: exists, error: existsErr } = await supabase.rpc('phone_exists', {
+    p_phone: normalized,
+  });
+  if (existsErr) throw existsErr;
+  if (exists) throw new Error('USER_EXISTS');
+
+  await supabase.auth.signOut();
+
+  const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
+  if (anonErr) throw anonErr;
+  if (!anonData.session) throw new Error('Anonymous session failed');
+
+  const session = anonData.session;
+  const passwordHash = await hashPassword(password);
+
+  const { error: profileErr } = await supabase.from('profiles').upsert(
+    {
+      id: session.user.id,
+      phone: normalized,
+      password_hash: passwordHash,
+      full_name: '',
+      role: 'both',
+      city: DEFAULT_CITY,
+      onboarding_completed: false,
+    },
+    { onConflict: 'id' }
+  );
+  if (profileErr) throw profileErr;
+
+  savePhoneSession(normalized, session);
+  return session;
+}
+
+/** Login with phone + password hash in profiles; restores saved Supabase session. */
+async function loginWithPhoneProfile(normalized: string, password: string): Promise<Session | null> {
+  if (!supabase) throw new Error('Supabase not configured');
+
+  const passwordHash = await hashPassword(password);
+  const { data: userId, error: verifyErr } = await supabase.rpc('verify_phone_password', {
+    p_phone: normalized,
+    p_password_hash: passwordHash,
+  });
+  if (verifyErr) throw verifyErr;
+
+  if (userId) {
+    const stored = loadPhoneSession(normalized);
+    if (stored && stored.userId === userId) {
+      const { data, error } = await supabase.auth.setSession({
+        access_token: stored.access_token,
+        refresh_token: stored.refresh_token,
+      });
+      if (!error && data.session?.user.id === userId) {
+        savePhoneSession(normalized, data.session!);
+        return data.session;
+      }
+    }
+  }
+
+  // Legacy accounts created via email signUp (no email sent on sign-in)
+  const legacy = await signInWithPhoneCredentials(normalized, password);
+  if (legacy.error || !legacy.data.session) return null;
+
+  savePhoneSession(normalized, legacy.data.session);
+
+  if (userId && legacy.data.session.user.id === userId) {
+    return legacy.data.session;
+  }
+
+  // Migrate legacy session: store password hash for phone auth next time
+  if (legacy.data.session.user.id) {
+    await supabase.from('profiles').upsert(
+      {
+        id: legacy.data.session.user.id,
+        phone: normalized,
+        password_hash: passwordHash,
+      },
+      { onConflict: 'id' }
+    );
+  }
+
+  return legacy.data.session;
+}
+
 async function syncFromSupabaseSession(session: Session): Promise<Partial<AuthState>> {
   const phone =
     (session.user.user_metadata?.phone as string | undefined) ??
@@ -110,7 +220,12 @@ async function syncFromSupabaseSession(session: Session): Promise<Partial<AuthSt
     };
   }
 
-  return applyAuthState(profile, profile.phone || normalizePhone(phone));
+  const resolvedPhone = profile.phone || normalizePhone(phone);
+  if (resolvedPhone) {
+    savePhoneSession(resolvedPhone, session);
+  }
+
+  return applyAuthState(profile, resolvedPhone);
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -237,47 +352,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
-      const email = phoneToAuthEmail(normalized);
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            phone: normalized,
-            full_name: '',
-            role: 'both',
-            city: DEFAULT_CITY,
-          },
-        },
-      });
-
-      if (error) {
-        if (error.message.toLowerCase().includes('already')) {
-          set({ error: tStatic('errUserExists', loc), isSubmitting: false });
-          return;
-        }
-        throw error;
-      }
-
-      if (!data.session && data.user) {
-        const signIn = await supabase.auth.signInWithPassword({ email, password });
-        if (signIn.error) throw signIn.error;
-        if (signIn.data.session) {
-          const next = await syncFromSupabaseSession(signIn.data.session);
-          set({ ...next, isSubmitting: false });
-          return;
-        }
-      }
-
-      if (data.session) {
-        await new Promise((r) => setTimeout(r, 400));
-        const next = await syncFromSupabaseSession(data.session);
-        set({ ...next, isSubmitting: false });
+      const session = await registerWithPhoneProfile(normalized, password);
+      const next = await syncFromSupabaseSession(session);
+      set({ ...next, isSubmitting: false });
+    } catch (err) {
+      if (err instanceof Error && err.message === 'USER_EXISTS') {
+        set({ error: tStatic('errUserExists', loc), isSubmitting: false });
         return;
       }
-
-      set({ error: tStatic('errRegister', loc), isSubmitting: false });
-    } catch (err) {
       const message = err instanceof Error ? err.message : tStatic('error', loc);
       set({ error: message, isSubmitting: false });
     }
@@ -310,17 +392,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
-      const email = phoneToAuthEmail(normalized);
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) {
+      const session = await loginWithPhoneProfile(normalized, password);
+      if (!session) {
         set({ error: tStatic('errInvalidCredentials', loc), isSubmitting: false });
         return;
       }
 
-      if (data.session) {
-        const next = await syncFromSupabaseSession(data.session);
-        set({ ...next, isSubmitting: false });
-      }
+      const next = await syncFromSupabaseSession(session);
+      set({ ...next, isSubmitting: false });
     } catch (err) {
       const message = err instanceof Error ? err.message : tStatic('error', loc);
       set({ error: message, isSubmitting: false });
@@ -415,6 +494,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
+    const phone = get().profile?.phone ?? get().pendingPhone;
+    if (phone) clearPhoneSession(phone);
     if (!IS_MOCK_MODE && supabase) {
       await supabase.auth.signOut();
     }

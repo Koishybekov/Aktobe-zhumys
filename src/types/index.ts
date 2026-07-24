@@ -19,6 +19,7 @@ export interface Profile {
   pro_since?: string | null;
   is_subscribed?: boolean;
   subscribed_until?: string | null;
+  password_hash?: string;
   viewed_job_ids?: string[];
 }
 
