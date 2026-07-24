@@ -28,6 +28,7 @@ export function resolveDisplayProfile(
     offer_accepted_at: source?.offer_accepted_at ?? null,
     onboarding_completed: source?.onboarding_completed ?? false,
     is_pro: source?.is_pro ?? false,
+    pro_expires_at: source?.pro_expires_at ?? source?.subscribed_until ?? null,
     is_subscribed: source?.is_subscribed ?? false,
     subscribed_until: source?.subscribed_until ?? null,
     pro_since: source?.pro_since ?? null,

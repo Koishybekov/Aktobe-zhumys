@@ -19,7 +19,7 @@ import {
   clearPhoneSession,
   clearAllPhoneSessions,
 } from '@/lib/phoneSessionStorage';
-import { subscriptionExpiresAt } from '@/lib/subscription';
+import { buildSubscriptionActivation, hasActivePro, PROFILE_SELECT, normalizeProfileProFields } from '@/lib/subscription';
 import {
   loadAuthSession,
   saveAuthSession,
@@ -98,12 +98,16 @@ function applyAuthState(
 
 async function fetchProfile(userId: string): Promise<Profile | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+  const { data, error } = await supabase
+    .from('profiles')
+    .select(PROFILE_SELECT)
+    .eq('id', userId)
+    .maybeSingle();
   if (error) {
     console.warn('[Актобе Жұмыс] Profile fetch failed:', error.message);
     return null;
   }
-  return data as Profile | null;
+  return data ? normalizeProfileProFields(data as Profile) : null;
 }
 
 async function signInWithPhoneCredentials(normalized: string, password: string) {
@@ -563,25 +567,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   subscribeToPro: async () => {
     const { profile } = get();
-    if (!profile || profile.is_pro) return;
+    if (!profile || hasActivePro(profile)) return;
 
     set({ isSubmitting: true, error: null });
 
-    const proProfile: Profile = {
-      ...profile,
-      is_subscribed: true,
-      subscribed_until: subscriptionExpiresAt(),
-      is_pro: true,
-      pro_since: new Date().toISOString(),
-    };
+    const activation = buildSubscriptionActivation(profile);
+    const proProfile: Profile = { ...profile, ...activation };
 
     if (!IS_MOCK_MODE && supabase) {
-      await supabase.from('profiles').update({
-        is_subscribed: true,
-        subscribed_until: proProfile.subscribed_until,
-        is_pro: true,
-        pro_since: proProfile.pro_since,
-      }).eq('id', profile.id);
+      await supabase.from('profiles').update(activation).eq('id', profile.id);
     }
 
     const session = loadAuthSession();
@@ -590,6 +584,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
 
     set({ profile: proProfile, isSubmitting: false });
+    useAppStore.getState().syncUserFromAuth();
   },
 
   logout: async () => {

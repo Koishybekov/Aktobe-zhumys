@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   onboarding_completed BOOLEAN DEFAULT false,
   is_pro BOOLEAN DEFAULT false,
   pro_since TIMESTAMPTZ,
+  pro_expires_at TIMESTAMPTZ,
   is_subscribed BOOLEAN DEFAULT false,
   subscribed_until TIMESTAMPTZ,
   viewed_job_ids TEXT[] DEFAULT '{}',

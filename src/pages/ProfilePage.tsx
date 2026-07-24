@@ -10,7 +10,6 @@ import {
   LogOut,
   FileText,
   ShieldCheck,
-  Crown,
   RefreshCw,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -26,7 +25,7 @@ import { CATEGORY_COLORS } from '@/lib/constants';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { ProSubscriptionCard, ProSubscriptionModal } from '@/components/profile/ProSubscription';
 import { AdminLink } from '@/pages/AdminPage';
-import { hasProBadge } from '@/lib/subscription';
+import { ProBadge } from '@/components/profile/ProBadge';
 import {
   formatOfferDate,
   formatProfileRating,
@@ -181,12 +180,7 @@ export function ProfilePage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-bold truncate">{displayName}</h2>
-              {hasProBadge(profile) && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-400/90 px-2 py-0.5 text-[10px] font-bold text-indigo-900 shrink-0">
-                  <Crown className="h-3 w-3" />
-                  {t('proBadge')}
-                </span>
-              )}
+              <ProBadge profile={profile} />
             </div>
             <div className="flex items-center gap-1 mt-1">
               <Star className="h-4 w-4 text-amber-300 fill-amber-300" />

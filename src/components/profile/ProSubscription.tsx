@@ -11,7 +11,7 @@ import { useTranslation } from '@/lib/i18n/useTranslation';
 import { KASPI_PAYMENT_PHONE, SUBSCRIPTION_PRICE, ADMIN_WHATSAPP } from '@/lib/constants';
 import { buildPaymentReceiptMessage } from '@/lib/admin';
 import { openWhatsApp } from '@/lib/whatsapp';
-import { hasActiveSubscription } from '@/lib/subscription';
+import { hasActiveSubscription, getProExpiry, formatSubscriptionExpiry } from '@/lib/subscription';
 import type { Profile } from '@/types';
 
 interface ProSubscriptionModalProps {
@@ -111,7 +111,7 @@ export function ProSubscriptionModal({ open, onClose, userPhone, paywall, paywal
 }
 
 interface ProSubscriptionCardProps {
-  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro'>;
+  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro' | 'pro_expires_at'>;
   onOpenModal: () => void;
 }
 
@@ -129,9 +129,9 @@ export function ProSubscriptionCard({ profile, onOpenModal }: ProSubscriptionCar
           <p className="font-semibold text-gray-900">{t('proTitle')}</p>
           <p className="text-xs text-emerald-600 font-medium">
             {t('proActive')} ✓
-            {profile.subscribed_until && (
+            {getProExpiry(profile) && (
               <span className="text-gray-400 ml-1">
-                · {t('proUntil')} {new Date(profile.subscribed_until).toLocaleDateString(locale === 'kk' ? 'kk-KZ' : 'ru-RU')}
+                · {t('proUntil')} {formatSubscriptionExpiry(getProExpiry(profile), locale)}
               </span>
             )}
           </p>

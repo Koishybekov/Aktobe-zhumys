@@ -38,7 +38,7 @@ export function getViewedCount(userId: string): number {
 export function canOpenJobDetails(
   userId: string,
   jobId: string,
-  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro'>
+  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro' | 'pro_expires_at'>
 ): boolean {
   if (hasActiveSubscription(profile)) return true;
 
@@ -49,7 +49,7 @@ export function canOpenJobDetails(
 
 export function getRemainingFreeViews(
   userId: string,
-  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro'>
+  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro' | 'pro_expires_at'>
 ): number {
   if (hasActiveSubscription(profile)) return Infinity;
   const used = getViewedCount(userId);
@@ -58,7 +58,7 @@ export function getRemainingFreeViews(
 
 export function isPaywallActive(
   userId: string,
-  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro'>
+  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro' | 'pro_expires_at'>
 ): boolean {
   if (hasActiveSubscription(profile)) return false;
   return getViewedCount(userId) >= FREE_JOB_VIEW_LIMIT;
@@ -68,7 +68,7 @@ export function isPaywallActive(
 export function tryRecordJobView(
   userId: string,
   jobId: string,
-  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro'>
+  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro' | 'pro_expires_at'>
 ): { allowed: boolean; state: JobViewState; limitReached: boolean } {
   if (hasActiveSubscription(profile)) {
     return { allowed: true, state: loadJobViewState(userId), limitReached: false };

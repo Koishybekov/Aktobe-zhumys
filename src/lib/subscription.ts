@@ -2,18 +2,59 @@ import type { Profile } from '@/types';
 
 export const SUBSCRIPTION_DAYS = 30;
 
-/** Active subscription — requires admin-activated `is_subscribed`. */
-export function hasActiveSubscription(
-  profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro'>
-): boolean {
-  if (profile.is_subscribed !== true) return false;
-  if (!profile.subscribed_until) return true;
-  return new Date(profile.subscribed_until).getTime() > Date.now();
+/** Columns fetched for profile / PRO status (Supabase `profiles` table). */
+export const PROFILE_SELECT =
+  'id, phone, full_name, avatar_url, role, rating, city, district, skills, offer_accepted_at, onboarding_completed, is_pro, pro_expires_at, pro_since, is_subscribed, subscribed_until, viewed_job_ids';
+
+export type ProProfileFields = Pick<
+  Profile,
+  'is_pro' | 'pro_expires_at' | 'is_subscribed' | 'subscribed_until'
+>;
+
+function parseExpiry(value: string | null | undefined): number | null {
+  if (!value) return null;
+  try {
+    const ts = new Date(value).getTime();
+    return Number.isNaN(ts) ? null : ts;
+  } catch {
+    return null;
+  }
 }
 
-/** Badge / display — subscribed or legacy PRO flag */
-export function hasProBadge(profile: Pick<Profile, 'is_subscribed' | 'subscribed_until' | 'is_pro'>): boolean {
-  return hasActiveSubscription(profile) || profile.is_pro === true;
+/** Resolve expiry from pro_expires_at, falling back to subscribed_until. */
+export function getProExpiry(profile: ProProfileFields): string | null {
+  return profile.pro_expires_at ?? profile.subscribed_until ?? null;
+}
+
+/**
+ * Active PRO: is_pro === true AND (pro_expires_at is null OR pro_expires_at > now).
+ * Also accepts legacy is_subscribed + subscribed_until when is_pro is not set.
+ */
+export function hasActivePro(profile: ProProfileFields): boolean {
+  if (profile.is_pro === true) {
+    const expiry = getProExpiry(profile);
+    if (!expiry) return true;
+    const ts = parseExpiry(expiry);
+    return ts === null ? true : ts > Date.now();
+  }
+
+  if (profile.is_subscribed === true) {
+    if (!profile.subscribed_until) return true;
+    const ts = parseExpiry(profile.subscribed_until);
+    return ts === null ? true : ts > Date.now();
+  }
+
+  return false;
+}
+
+/** Paywall bypass — same as active PRO (expired users fall back to free limits). */
+export function hasActiveSubscription(profile: ProProfileFields): boolean {
+  return hasActivePro(profile);
+}
+
+/** Visual PRO badge — only when subscription is currently active. */
+export function hasProBadge(profile: ProProfileFields): boolean {
+  return hasActivePro(profile);
 }
 
 export function subscriptionExpiresAt(): string {
@@ -24,19 +65,31 @@ export function subscriptionExpiresAt(): string {
 
 export function buildSubscriptionActivation(profile: Profile): Partial<Profile> {
   const now = new Date().toISOString();
+  const expires = subscriptionExpiresAt();
   return {
     is_subscribed: true,
-    subscribed_until: subscriptionExpiresAt(),
+    subscribed_until: expires,
+    pro_expires_at: expires,
     is_pro: true,
     pro_since: profile.pro_since ?? now,
   };
 }
 
-export function formatSubscriptionExpiry(until: string | null | undefined, locale: 'kk' | 'ru'): string {
-  if (!until) return locale === 'kk' ? 'белсенді' : 'активна';
+export function formatSubscriptionExpiry(
+  until: string | null | undefined,
+  locale: 'kk' | 'ru'
+): string {
+  const value = until ?? '';
+  if (!value) return locale === 'kk' ? 'белсенді' : 'активна';
   try {
-    return new Date(until).toLocaleDateString(locale === 'kk' ? 'kk-KZ' : 'ru-RU');
+    return new Date(value).toLocaleDateString(locale === 'kk' ? 'kk-KZ' : 'ru-RU');
   } catch {
-    return until;
+    return value;
   }
+}
+
+/** Normalize profile row from Supabase (fill pro_expires_at from subscribed_until). */
+export function normalizeProfileProFields(profile: Profile): Profile {
+  const pro_expires_at = profile.pro_expires_at ?? profile.subscribed_until ?? null;
+  return { ...profile, pro_expires_at };
 }

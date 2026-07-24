@@ -12,6 +12,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { formatPrice, formatRelativeTime, getInitials, getJobSalary } from '@/lib/utils';
 import { openWhatsApp } from '@/lib/whatsapp';
 import { useTranslation } from '@/lib/i18n/useTranslation';
+import { ProBadge } from '@/components/profile/ProBadge';
 import type { Job, Profile } from '@/types';
 
 type JobWithProfiles = Job & {
@@ -127,6 +128,7 @@ export function JobDetailsModal({
                   <div className="flex items-center gap-1.5">
                     <User className="h-3.5 w-3.5 text-gray-400" />
                     <span className="text-sm font-medium text-gray-900 truncate">{clientName}</span>
+                    <ProBadge profile={profile} size="sm" />
                   </div>
                   <StarRating rating={clientRating} />
                 </div>

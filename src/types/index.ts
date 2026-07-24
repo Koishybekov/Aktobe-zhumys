@@ -17,6 +17,7 @@ export interface Profile {
   onboarding_completed?: boolean;
   is_pro?: boolean;
   pro_since?: string | null;
+  pro_expires_at?: string | null;
   is_subscribed?: boolean;
   subscribed_until?: string | null;
   password_hash?: string;

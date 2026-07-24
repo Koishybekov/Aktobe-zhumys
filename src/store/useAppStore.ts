@@ -17,7 +17,7 @@ import { generateId } from '@/lib/utils';
 import { loadAuthSession, saveAuthSession, updateSessionProfile } from '@/lib/authStorage';
 import { getActiveUserId, useAuthStore } from '@/store/useAuthStore';
 import { normalizePhone } from '@/lib/authPhone';
-import { buildSubscriptionActivation } from '@/lib/subscription';
+import { buildSubscriptionActivation, PROFILE_SELECT, normalizeProfileProFields } from '@/lib/subscription';
 import {
   canPostJob,
   getPostedJobCount,
@@ -209,7 +209,7 @@ function setupRealtime(set: (fn: (state: AppState) => Partial<AppState>) => void
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
       set((state) => {
         if (payload.eventType === 'DELETE') return {};
-        const row = payload.new as Profile;
+        const row = normalizeProfileProFields(payload.new as Profile);
         const profiles = upsertProfileList(state.profiles, row);
         const uid = userId();
         if (row.id === uid) {
@@ -258,8 +258,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           supabase.from('job_applications').select('*'),
           supabase.from('reviews').select('*'),
           supabase.from('chat_messages').select('*').order('created_at', { ascending: true }),
-          supabase.from('profiles').select('*'),
-          supabase.from('profiles').select('*').eq('id', uid).maybeSingle(),
+          supabase.from('profiles').select(PROFILE_SELECT),
+          supabase.from('profiles').select(PROFILE_SELECT).eq('id', uid).maybeSingle(),
         ]),
         12000
       );
@@ -272,8 +272,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         profileRes.error,
       ].filter(Boolean);
 
-      const profile = profileRes.data ?? resolveCurrentUser();
-      const profiles = profilesRes.data ?? [];
+      const profile = profileRes.data
+        ? normalizeProfileProFields(profileRes.data as Profile)
+        : resolveCurrentUser();
+      const profiles = (profilesRes.data ?? []).map((p) => normalizeProfileProFields(p as Profile));
 
       if (errors.length > 0) {
         console.warn('[Актобе Жұмыс] Supabase fetch failed:', errors);
@@ -618,7 +620,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!target && !IS_MOCK_MODE && supabase) {
       const { data, error } = await supabase
         .from('profiles')
-        .select('*')
+        .select(PROFILE_SELECT)
         .eq('phone', normalized)
         .maybeSingle();
       if (error) throw error;
