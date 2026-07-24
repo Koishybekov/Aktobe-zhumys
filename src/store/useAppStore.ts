@@ -20,6 +20,7 @@ import {
   canPostJob,
   getPostedJobCount,
 } from '@/lib/jobPostLimit';
+import { fetchJobsFromSupabase } from '@/lib/jobsApi';
 import { updateMockUserProfileByPhone, findMockUserByPhone } from '@/lib/mockAuth';
 import {
   mockProfiles,
@@ -39,10 +40,13 @@ interface AppState {
   selectedCategory: string;
   searchQuery: string;
   isLoading: boolean;
+  jobsLoading: boolean;
+  jobsError: string | null;
   initialized: boolean;
   initError: string | null;
 
   initialize: () => Promise<void>;
+  fetchJobs: () => Promise<void>;
   syncUserFromAuth: () => void;
   resetSession: () => void;
   teardownRealtime: () => void;
@@ -218,6 +222,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedCategory: 'all',
   searchQuery: '',
   isLoading: false,
+  jobsLoading: false,
+  jobsError: null,
   initialized: false,
   initError: null,
 
@@ -234,9 +240,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       const uid = userId();
-      const [jobsRes, appsRes, reviewsRes, messagesRes, profilesRes, profileRes] = await withTimeout(
+      const [jobsResult, appsRes, reviewsRes, messagesRes, profilesRes, profileRes] = await withTimeout(
         Promise.all([
-          supabase.from('jobs').select('*').order('created_at', { ascending: false }),
+          fetchJobsFromSupabase(),
           supabase.from('job_applications').select('*'),
           supabase.from('reviews').select('*'),
           supabase.from('chat_messages').select('*').order('created_at', { ascending: true }),
@@ -247,7 +253,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       );
 
       const errors = [
-        jobsRes.error,
         appsRes.error,
         reviewsRes.error,
         messagesRes.error,
@@ -255,29 +260,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         profileRes.error,
       ].filter(Boolean);
 
-      if (errors.length > 0) {
-        console.warn('[Актобе Жұмыс] Supabase fetch failed:', errors);
-        const user = resolveCurrentUser();
-        set({
-          jobs: [],
-          applications: [],
-          reviews: [],
-          messages: [],
-          profiles: profilesRes.data ?? [],
-          currentUser: profileRes.data ?? user,
-          selectedCity: (profileRes.data ?? user).city ?? DEFAULT_CITY,
-          isLoading: false,
-          initialized: true,
-          initError: errors[0]?.message ?? 'Failed to load data',
-        });
-        return;
-      }
-
       const profile = profileRes.data ?? resolveCurrentUser();
       const profiles = profilesRes.data ?? [];
 
+      if (errors.length > 0) {
+        console.warn('[Актобе Жұмыс] Supabase fetch failed:', errors);
+      }
+
       set({
-        jobs: jobsRes.data ?? [],
+        jobs: jobsResult.data,
+        jobsError: jobsResult.error,
         applications: appsRes.data ?? [],
         reviews: reviewsRes.data ?? [],
         messages: messagesRes.data ?? [],
@@ -299,6 +291,30 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedCity: user.city ?? DEFAULT_CITY,
         isLoading: false,
         initError: error instanceof Error ? error.message : 'Failed to initialize',
+      });
+    }
+  },
+
+  fetchJobs: async () => {
+    set({ jobsLoading: true, jobsError: null });
+
+    try {
+      const { data, error } = await fetchJobsFromSupabase();
+
+      set({
+        jobs: data,
+        jobsLoading: false,
+        jobsError: error,
+        initialized: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось загрузить вакансии';
+      console.error('[Актобе Жұмыс] Failed to load jobs:', error);
+      set({
+        jobs: [],
+        jobsLoading: false,
+        jobsError: message,
+        initialized: true,
       });
     }
   },
@@ -326,6 +342,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().teardownRealtime();
     set({
       jobs: [],
+      jobsError: null,
       applications: [],
       reviews: [],
       messages: [],
@@ -347,9 +364,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   getOpenJobs: () => {
     const { jobs, selectedCity, selectedDistrict, selectedCategory, searchQuery } = get();
     return jobs.filter((job) => {
-      if (job.status !== 'open') return false;
-      if (selectedCity !== 'All' && job.city !== selectedCity) return false;
-      if (selectedDistrict !== 'all' && job.district !== selectedDistrict) return false;
+      if (job.status && job.status.toLowerCase() !== 'open') return false;
+      if (selectedCity !== 'All' && job.city && job.city !== selectedCity) return false;
+      if (selectedDistrict !== 'all' && job.district && job.district !== selectedDistrict) return false;
       if (selectedCategory !== 'all' && job.category !== selectedCategory) return false;
       if (searchQuery) {
         const q = searchQuery.toLowerCase();

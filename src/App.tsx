@@ -47,7 +47,7 @@ function AppBootstrap({ children }: { children: React.ReactNode }) {
     return <AppLoadingScreen />;
   }
 
-  if (initError) {
+  if (initError && !initialized) {
     return <AppInitError message={initError} onRetry={() => void initialize()} />;
   }
 

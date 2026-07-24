@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Search } from 'lucide-react';
+import { Search, AlertCircle, RefreshCw } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { JobCard } from '@/components/jobs/JobCard';
 import { JobDetailsModal } from '@/components/jobs/JobDetailsModal';
 import { CategoryFilter } from '@/components/jobs/CategoryFilter';
@@ -12,6 +13,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { getActiveUserId } from '@/store/useAuthStore';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { hasActiveSubscription } from '@/lib/subscription';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import {
   tryRecordJobView,
   getRemainingFreeViews,
@@ -24,8 +26,10 @@ import type { Job } from '@/types';
 
 export function ExplorePage() {
   const { t } = useTranslation();
-  const initialized = useAppStore((s) => s.initialized);
-  const isLoading = useAppStore((s) => s.isLoading);
+  const jobsLoading = useAppStore((s) => s.jobsLoading);
+  const jobsError = useAppStore((s) => s.jobsError);
+  const allJobs = useAppStore((s) => s.jobs);
+  const fetchJobs = useAppStore((s) => s.fetchJobs);
   const currentUser = useAppStore((s) => s.currentUser);
   const selectedCategory = useAppStore((s) => s.selectedCategory);
   const selectedDistrict = useAppStore((s) => s.selectedDistrict);
@@ -47,6 +51,30 @@ export function ExplorePage() {
   const userId = getActiveUserId();
   const subscribed = hasActiveSubscription(currentUser);
   const remainingViews = subscribed ? Infinity : getRemainingFreeViews(userId, currentUser);
+
+  /** Загрузка вакансий из Supabase при открытии страницы */
+  useEffect(() => {
+    async function loadJobsFromSupabase() {
+      if (!supabase) {
+        console.error('[ExplorePage] Supabase client is null');
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      console.log('Jobs from Supabase:', data);
+
+      if (error) {
+        console.error('Jobs from Supabase — error:', error.message, error);
+      }
+    }
+
+    void loadJobsFromSupabase();
+    void fetchJobs();
+  }, [fetchJobs]);
 
   useEffect(() => {
     const state = syncJobViewsFromProfile(userId, currentUser.viewed_job_ids);
@@ -87,7 +115,7 @@ export function ExplorePage() {
       void syncViewsToProfile(result.state.viewedJobIds);
       setSelectedJob(job);
     },
-    [userId, currentUser, subscribed, openPaywall, syncViewsToProfile]
+    [userId, currentUser, openPaywall, syncViewsToProfile]
   );
 
   const handleApply = async (job: Job) => {
@@ -104,7 +132,14 @@ export function ExplorePage() {
     }
   };
 
+  const resetFilters = () => {
+    setSelectedCategory('all');
+    setSelectedDistrict('all');
+    setSearchQuery('');
+  };
+
   const jobs = getOpenJobs();
+  const supabaseReady = isSupabaseConfigured();
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -121,6 +156,32 @@ export function ExplorePage() {
         )}
       </div>
 
+      {!supabaseReady && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 flex gap-3">
+          <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-red-800">{t('jobsLoadError')}</p>
+            <p className="text-sm text-red-600 mt-1">
+              Supabase не подключён. Проверьте `.env`: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
+            </p>
+          </div>
+        </div>
+      )}
+
+      {jobsError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 flex gap-3">
+          <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-red-800">{t('jobsLoadError')}</p>
+            <p className="text-sm text-red-600 mt-1 break-words">{jobsError}</p>
+            <Button variant="outline" size="sm" className="mt-3" onClick={() => void fetchJobs()}>
+              <RefreshCw className="h-4 w-4" />
+              {t('jobsRetry')}
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="relative">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
         <Input
@@ -135,12 +196,25 @@ export function ExplorePage() {
       <CategoryFilter selected={selectedCategory} onChange={setSelectedCategory} />
 
       <div className="space-y-3">
-        {isLoading || !initialized ? (
+        {jobsLoading ? (
           Array.from({ length: 4 }).map((_, i) => <JobCardSkeleton key={i} />)
-        ) : jobs.length === 0 ? (
-          <div className="text-center py-16">
-            <p className="text-gray-400 text-lg">{t('noJobs')}</p>
-            <p className="text-sm text-gray-400 mt-1">{t('tryFilters')}</p>
+        ) : jobsError ? null : jobs.length === 0 && allJobs.length === 0 ? (
+          <div className="text-center py-16 rounded-xl border border-dashed border-gray-200 bg-gray-50">
+            <p className="text-gray-500 text-lg">{t('jobsEmptyDb')}</p>
+            <p className="text-sm text-gray-400 mt-1">{t('noJobs')}</p>
+            <Button variant="outline" size="sm" className="mt-4" onClick={() => void fetchJobs()}>
+              <RefreshCw className="h-4 w-4" />
+              {t('jobsRetry')}
+            </Button>
+          </div>
+        ) : jobs.length === 0 && allJobs.length > 0 ? (
+          <div className="text-center py-16 rounded-xl border border-amber-200 bg-amber-50">
+            <p className="text-amber-900 font-medium">
+              {t('jobsFilteredOut').replace('{count}', String(allJobs.length))}
+            </p>
+            <Button variant="outline" size="sm" className="mt-4" onClick={resetFilters}>
+              {t('tryFilters')}
+            </Button>
           </div>
         ) : (
           jobs.map((job) => (
