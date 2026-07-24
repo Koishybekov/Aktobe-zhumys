@@ -19,7 +19,7 @@ import {
   clearPhoneSession,
   clearAllPhoneSessions,
 } from '@/lib/phoneSessionStorage';
-import { buildSubscriptionActivation, hasActivePro, PROFILE_SELECT, normalizeProfileProFields } from '@/lib/subscription';
+import { buildSubscriptionActivation, hasActivePro, computeIsPro, PROFILE_SELECT, normalizeProfileProFields } from '@/lib/subscription';
 import {
   loadAuthSession,
   saveAuthSession,
@@ -45,11 +45,13 @@ interface AuthState {
   selectedRole: UserRole;
   offerAcceptedAt: string | null;
   profile: Profile | null;
+  isPro: boolean;
   isSubmitting: boolean;
   isHydrating: boolean;
   error: string | null;
 
   hydrate: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
   initAuthListener: () => () => void;
   register: (phone: string, password: string, confirmPassword: string, fullName: string) => Promise<void>;
   login: (phone: string, password: string) => Promise<void>;
@@ -63,22 +65,30 @@ function locale() {
   return useLocaleStore.getState().locale;
 }
 
+function sessionStateWithPro(stored: NonNullable<ReturnType<typeof loadAuthSession>>) {
+  const state = authStateFromSession(stored);
+  return { ...state, isPro: computeIsPro(state.profile) };
+}
+
 function applyAuthState(
   profile: Profile,
   phone: string,
   offerAcceptedAt: string | null = profile.offer_accepted_at ?? null
 ) {
   const onboardingCompleted = !!profile.onboarding_completed || isOnboardingCompletedLocal();
-  const profileWithOnboarding = { ...profile, onboarding_completed: onboardingCompleted };
+  const profileWithOnboarding = normalizeProfileProFields({
+    ...profile,
+    onboarding_completed: onboardingCompleted,
+  });
 
   if (onboardingCompleted) {
     setOnboardingCompletedLocal(true);
   }
 
   saveAuthSession({
-    userId: profile.id,
+    userId: profileWithOnboarding.id,
     phone,
-    role: profile.role,
+    role: profileWithOnboarding.role,
     isAuthenticated: true,
     offerAcceptedAt,
     onboardingCompleted,
@@ -89,9 +99,10 @@ function applyAuthState(
     isAuthenticated: true,
     onboardingCompleted,
     pendingPhone: phone,
-    selectedRole: profile.role,
+    selectedRole: profileWithOnboarding.role,
     offerAcceptedAt,
     profile: profileWithOnboarding,
+    isPro: computeIsPro(profileWithOnboarding),
     error: null,
   };
 }
@@ -383,6 +394,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   selectedRole: 'both',
   offerAcceptedAt: null,
   profile: null,
+  isPro: false,
   isSubmitting: false,
   isHydrating: true,
   error: null,
@@ -396,7 +408,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // 1) Restore from localStorage first (survives F5 / refresh)
       if (isValidAuthSession(stored)) {
         if (IS_MOCK_MODE || !supabase) {
-          set({ ...authStateFromSession(stored), isHydrating: false });
+          set({ ...sessionStateWithPro(stored), isHydrating: false });
           applyStoredAuthToApp(stored);
           return;
         }
@@ -420,7 +432,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
         // Supabase tokens expired — keep local session so user stays in the app
         console.warn('[Актобе Жұмыс] Using persisted local auth (Supabase session unavailable)');
-        set({ ...authStateFromSession(stored), isHydrating: false });
+        set({ ...sessionStateWithPro(stored), isHydrating: false });
         applyStoredAuthToApp(stored);
         return;
       }
@@ -451,7 +463,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err) {
       console.warn('[Актобе Жұмыс] Auth hydrate failed:', err);
       if (isValidAuthSession(stored)) {
-        set({ ...authStateFromSession(stored), isHydrating: false });
+        set({ ...sessionStateWithPro(stored), isHydrating: false });
         applyStoredAuthToApp(stored);
       } else {
         set({ isHydrating: false });
@@ -489,6 +501,29 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     return () => subscription.unsubscribe();
   },
 
+  refreshProfile: async () => {
+    const uid = get().profile?.id ?? loadAuthSession()?.userId;
+    if (!uid) return;
+
+    if (IS_MOCK_MODE || !supabase) {
+      const current = get().profile;
+      if (current) {
+        const normalized = normalizeProfileProFields(current);
+        set({ profile: normalized, isPro: computeIsPro(normalized) });
+        useAppStore.getState().syncUserFromAuth();
+      }
+      return;
+    }
+
+    const fresh = await fetchProfile(uid);
+    if (!fresh) return;
+
+    const phone = fresh.phone ?? get().pendingPhone ?? loadAuthSession()?.phone ?? '';
+    const patch = applyAuthState(fresh, phone, fresh.offer_accepted_at ?? get().offerAcceptedAt);
+    set(patch);
+    useAppStore.getState().syncUserFromAuth();
+  },
+
   register: async (phone, password, confirmPassword, fullName) => {
     const loc = locale();
     const normalized = normalizePhone(phone);
@@ -519,6 +554,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           const record = registerMockUser(normalized, password, name);
           const next = applyAuthState(record.profile, normalized);
           set({ ...next, isSubmitting: false });
+          await get().refreshProfile();
         } catch {
           set({ error: tStatic('errUserExists', loc), isSubmitting: false });
         }
@@ -528,6 +564,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const session = await registerWithPhoneProfile(normalized, password, name);
       const next = await syncFromSupabaseSession(session);
       set({ ...next, isSubmitting: false });
+      await get().refreshProfile();
     } catch (err) {
       if (err instanceof Error && err.message === 'USER_EXISTS') {
         set({ error: tStatic('errUserExists', loc), isSubmitting: false });
@@ -562,6 +599,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
         const next = applyAuthState(record.profile, normalized, record.profile.offer_accepted_at ?? null);
         set({ ...next, isSubmitting: false });
+        await get().refreshProfile();
         return;
       }
 
@@ -573,6 +611,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       const next = await syncFromSupabaseSession(session);
       set({ ...next, isSubmitting: false });
+      await get().refreshProfile();
     } catch (err) {
       const message = err instanceof Error ? err.message : tStatic('error', loc);
       set({ error: message, isSubmitting: false });
@@ -667,6 +706,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       selectedRole: 'both',
       offerAcceptedAt: null,
       profile: null,
+      isPro: false,
       error: null,
     });
   },

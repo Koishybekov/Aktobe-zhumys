@@ -17,6 +17,7 @@ export function AdminPage() {
   const { t } = useTranslation();
   const { toast } = useToast();
   const profile = useAuthStore((s) => s.profile);
+  const isPro = useAuthStore((s) => s.isPro);
   const adminActivateSubscription = useAppStore((s) => s.adminActivateSubscription);
 
   const [targetPhone, setTargetPhone] = useState('');
@@ -81,7 +82,10 @@ export function AdminPage() {
       <main className="mx-auto max-w-md px-4 py-6 space-y-6">
         <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-4">
           <p className="text-sm text-indigo-800">{t('adminDesc')}</p>
-          <p className="text-xs text-indigo-600 mt-1">{t('adminLoggedInAs')} {profile.phone}</p>
+          <p className="text-xs text-indigo-600 mt-1">
+            {t('adminLoggedInAs')} {profile.phone}
+            {isPro && ` · PRO ✓`}
+          </p>
         </div>
 
         <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm space-y-4">
@@ -134,8 +138,14 @@ export function AdminLink() {
   );
 }
 
+/** PRO status from auth context (strict is_pro + pro_expires_at check). */
+export function useIsPro() {
+  return useAuthStore((s) => s.isPro);
+}
+
 /** Small helper for profile subscription badge */
 export function useIsSubscribed() {
+  const isPro = useAuthStore((s) => s.isPro);
   const currentUser = useAppStore((s) => s.currentUser);
-  return hasActiveSubscription(currentUser);
+  return isPro || hasActiveSubscription(currentUser);
 }

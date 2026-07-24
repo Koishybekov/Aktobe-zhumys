@@ -17,12 +17,13 @@ import { generateId } from '@/lib/utils';
 import { loadAuthSession, saveAuthSession, updateSessionProfile } from '@/lib/authStorage';
 import { getActiveUserId, useAuthStore } from '@/store/useAuthStore';
 import { normalizePhone } from '@/lib/authPhone';
-import { buildSubscriptionActivation, PROFILE_SELECT, normalizeProfileProFields } from '@/lib/subscription';
+import { buildSubscriptionActivation, PROFILE_SELECT, normalizeProfileProFields, computeIsPro } from '@/lib/subscription';
 import {
   canPostJob,
   getPostedJobCount,
 } from '@/lib/jobPostLimit';
 import { fetchJobsFromSupabase } from '@/lib/jobsApi';
+import { findProfileByPhone, findProfileByPhoneInList } from '@/lib/profileLookup';
 import { insertJobToSupabase, JobSubmitError, resolveAuthUserId } from '@/lib/jobCreate';
 import { updateMockUserProfileByPhone, findMockUserByPhone } from '@/lib/mockAuth';
 import { getProfileById } from '@/data/mockData';
@@ -336,12 +337,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   syncUserFromAuth: () => {
     const profile = useAuthStore.getState().profile;
     if (!profile) return;
+    const normalized = normalizeProfileProFields(profile);
     set((state) => ({
-      currentUser: profile,
-      profiles: upsertProfileList(state.profiles, profile),
-      selectedCity: profile.city ?? state.selectedCity,
+      currentUser: normalized,
+      profiles: upsertProfileList(state.profiles, normalized),
+      selectedCity: normalized.city ?? state.selectedCity,
       activeMode:
-        profile.role === 'client' ? 'client' : profile.role === 'worker' ? 'worker' : state.activeMode,
+        normalized.role === 'client' ? 'client' : normalized.role === 'worker' ? 'worker' : state.activeMode,
     }));
   },
 
@@ -563,7 +565,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       await delay(200);
     }
 
-    const updated = { ...get().currentUser, ...updates };
+    const updated = normalizeProfileProFields({ ...get().currentUser, ...updates });
 
     set((state) => ({
       currentUser: updated,
@@ -572,10 +574,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const session = loadAuthSession();
     if (session?.profile) {
-      const nextProfile = { ...session.profile, ...updates };
+      const nextProfile = normalizeProfileProFields({ ...session.profile, ...updates });
       saveAuthSession(updateSessionProfile(session, nextProfile));
-      useAuthStore.setState({ profile: nextProfile });
+      useAuthStore.setState({
+        profile: nextProfile,
+        isPro: computeIsPro(nextProfile),
+      });
     }
+
+    await useAuthStore.getState().refreshProfile();
   },
 
   subscribeToPro: async () => {
@@ -614,41 +621,48 @@ export const useAppStore = create<AppState>((set, get) => ({
   adminActivateSubscription: async (targetPhone) => {
     const normalized = normalizePhone(targetPhone);
 
-    let target: Profile | null =
-      get().profiles.find((p) => normalizePhone(p.phone) === normalized) ?? null;
+    let target: Profile | null = findProfileByPhoneInList(normalized, get().profiles);
 
     if (!target && !IS_MOCK_MODE && supabase) {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select(PROFILE_SELECT)
-        .eq('phone', normalized)
-        .maybeSingle();
-      if (error) throw error;
-      target = data as Profile | null;
+      target = await findProfileByPhone(normalized);
     }
 
     if (!target) {
       target = findMockUserByPhone(normalized)?.profile ?? null;
     }
 
-    if (!target) return null;
+    if (!target?.id) return null;
 
     const activation = buildSubscriptionActivation(target);
-    const updated: Profile = { ...target, ...activation };
+    const updated: Profile = normalizeProfileProFields({ ...target, ...activation });
 
     if (!IS_MOCK_MODE && supabase) {
       const { error: rpcError } = await supabase.rpc('admin_activate_subscription', {
         target_phone: normalized,
       });
       if (rpcError) {
-        const { error } = await supabase.from('profiles').update(activation).eq('id', target.id);
+        const { error } = await supabase
+          .from('profiles')
+          .update(activation)
+          .eq('id', target.id);
         if (error) throw error;
+      } else {
+        const refreshed = await findProfileByPhone(normalized);
+        if (refreshed) Object.assign(updated, refreshed);
       }
     } else {
       updateMockUserProfileByPhone(normalized, activation);
     }
 
-    await get().updateProfileById(target.id, activation);
+    await get().updateProfileById(target.id, updated);
+    set((state) => ({
+      profiles: upsertProfileList(state.profiles, updated),
+      currentUser: state.currentUser.id === target!.id ? updated : state.currentUser,
+    }));
+
+    if (getActiveUserId() === target.id) {
+      await useAuthStore.getState().refreshProfile();
+    }
 
     return updated;
   },

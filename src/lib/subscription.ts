@@ -2,14 +2,23 @@ import type { Profile } from '@/types';
 
 export const SUBSCRIPTION_DAYS = 30;
 
-/** Columns fetched for profile / PRO status (Supabase `profiles` table). */
-export const PROFILE_SELECT =
-  'id, phone, full_name, avatar_url, role, rating, city, district, skills, offer_accepted_at, onboarding_completed, is_pro, pro_expires_at, pro_since, is_subscribed, subscribed_until, viewed_job_ids';
+/** Explicit PRO fields + full row from Supabase `profiles`. */
+export const PROFILE_SELECT = '*, is_pro, pro_expires_at';
 
 export type ProProfileFields = Pick<
   Profile,
   'is_pro' | 'pro_expires_at' | 'is_subscribed' | 'subscribed_until'
 >;
+
+/** Strict PRO check: is_pro === true AND pro_expires_at > now. */
+export function computeIsPro(
+  profile: Pick<Profile, 'is_pro' | 'pro_expires_at'> | null | undefined
+): boolean {
+  if (!profile?.is_pro) return false;
+  if (!profile.pro_expires_at) return false;
+  const expiresAt = new Date(profile.pro_expires_at);
+  return !Number.isNaN(expiresAt.getTime()) && expiresAt > new Date();
+}
 
 function parseExpiry(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -31,12 +40,7 @@ export function getProExpiry(profile: ProProfileFields): string | null {
  * Also accepts legacy is_subscribed + subscribed_until when is_pro is not set.
  */
 export function hasActivePro(profile: ProProfileFields): boolean {
-  if (profile.is_pro === true) {
-    const expiry = getProExpiry(profile);
-    if (!expiry) return true;
-    const ts = parseExpiry(expiry);
-    return ts === null ? true : ts > Date.now();
-  }
+  if (computeIsPro(profile)) return true;
 
   if (profile.is_subscribed === true) {
     if (!profile.subscribed_until) return true;
@@ -54,7 +58,7 @@ export function hasActiveSubscription(profile: ProProfileFields): boolean {
 
 /** Visual PRO badge — only when subscription is currently active. */
 export function hasProBadge(profile: ProProfileFields): boolean {
-  return hasActivePro(profile);
+  return computeIsPro(profile) || hasActivePro(profile);
 }
 
 export function subscriptionExpiresAt(): string {
