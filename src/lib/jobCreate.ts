@@ -74,27 +74,52 @@ export function validateCreateJobInput(input: CreateJobInput): Partial<Record<Jo
   return errors;
 }
 
-/** Row shape for Supabase `jobs` insert (client_id + user_id for schema compatibility). */
+/** Row shape for Supabase `jobs` insert — core columns required by production schema. */
 export function buildJobInsertRow(input: CreateJobInput, ownerId: string) {
   const title = input.title.trim();
-  const company = input.company.trim();
   const description = input.description.trim();
   const city = input.city.trim() || DEFAULT_JOB_CITY;
   const salary = Number(input.salary);
+  const category = input.category.trim();
 
   return {
     title,
-    company,
-    description,
-    category: input.category.trim(),
     salary,
-    phone: input.phone,
+    description,
+    phone: input.phone.trim(),
+    category,
     city,
     client_id: ownerId,
+  };
+}
+
+/** Extended row with optional columns (may be absent in older DB schemas). */
+export function buildJobInsertRowExtended(input: CreateJobInput, ownerId: string) {
+  return {
+    ...buildJobInsertRow(input, ownerId),
+    company: input.company.trim(),
     user_id: ownerId,
     status: 'open' as const,
     selected_worker_id: null,
   };
+}
+
+function isSchemaMismatchError(error: PostgrestError): boolean {
+  const code = error.code ?? '';
+  const combined = `${error.message} ${error.details ?? ''} ${error.hint ?? ''}`.toLowerCase();
+  return (
+    code === 'PGRST204' ||
+    combined.includes('column') ||
+    combined.includes('schema cache') ||
+    combined.includes('does not exist')
+  );
+}
+
+export function formatJobSchemaErrorMessage(error: PostgrestError): string {
+  if (isSchemaMismatchError(error)) {
+    return `Schema error: ${error.message}. Core fields (title, salary, description, phone, category, city) were sent.`;
+  }
+  return error.message;
 }
 
 export function mapSupabaseJobError(error: PostgrestError): JobSubmitError {
@@ -128,13 +153,23 @@ export async function insertJobToSupabase(input: CreateJobInput): Promise<Job> {
   }
 
   const ownerId = await resolveAuthUserId();
-  const row = buildJobInsertRow(input, ownerId);
+  const coreRow = buildJobInsertRow(input, ownerId);
+  const extendedRow = buildJobInsertRowExtended(input, ownerId);
 
-  const { data, error } = await supabase.from('jobs').insert(row).select('*').single();
+  let result = await supabase.from('jobs').insert([extendedRow]).select('*').single();
+
+  if (result.error && isSchemaMismatchError(result.error)) {
+    console.warn('[Актобе Жұмыс] Extended job insert failed, retrying core columns:', result.error.message);
+    result = await supabase.from('jobs').insert([coreRow]).select('*').single();
+  }
+
+  const { data, error } = result;
 
   if (error) {
     console.error('Job submit error:', error);
-    throw mapSupabaseJobError(error);
+    const mapped = mapSupabaseJobError(error);
+    mapped.message = formatJobSchemaErrorMessage(error);
+    throw mapped;
   }
 
   if (!data) {
