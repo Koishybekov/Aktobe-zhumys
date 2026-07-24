@@ -50,7 +50,7 @@ interface AuthState {
   initAuthListener: () => () => void;
   register: (phone: string, password: string, confirmPassword: string) => Promise<void>;
   login: (phone: string, password: string) => Promise<void>;
-  completeProfileSetup: (input: ProfileSetupInput) => Promise<void>;
+  completeProfileSetup: (input: ProfileSetupInput) => Promise<boolean>;
   subscribeToPro: () => Promise<void>;
   logout: () => Promise<void>;
   getUserId: () => string;
@@ -458,56 +458,98 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   completeProfileSetup: async (input) => {
     const { profile, pendingPhone, selectedRole, offerAcceptedAt } = get();
     const loc = locale();
-    if (!profile) return;
+    const stored = loadAuthSession();
+    const userId = profile?.id ?? stored?.userId;
+    const phone = profile?.phone ?? pendingPhone ?? stored?.phone ?? '';
+
+    if (!userId) {
+      set({ error: tStatic('error', loc) });
+      return false;
+    }
 
     if ((selectedRole === 'worker' || selectedRole === 'both') && input.skills.length === 0) {
       set({ error: tStatic('errSkills', loc) });
-      return;
+      return false;
     }
     if (!input.district || input.district === 'all') {
       set({ error: tStatic('errDistrict', loc) });
-      return;
+      return false;
     }
 
     set({ isSubmitting: true, error: null });
 
+    const baseProfile: Profile = profile ?? {
+      id: userId,
+      phone,
+      full_name: '',
+      avatar_url: null,
+      role: selectedRole,
+      rating: 5.0,
+      city: DEFAULT_CITY,
+      district: '',
+      skills: [],
+      offer_accepted_at: offerAcceptedAt,
+      onboarding_completed: false,
+    };
+
     const completedProfile: Profile = {
-      ...profile,
-      full_name: input.full_name.trim() || profile.full_name,
-      avatar_url: input.avatar_url ?? profile.avatar_url,
+      ...baseProfile,
+      full_name: input.full_name.trim() || baseProfile.full_name,
+      avatar_url: input.avatar_url ?? baseProfile.avatar_url,
       city: input.city || DEFAULT_CITY,
       district: input.district,
       skills: input.skills,
       role: selectedRole,
       offer_accepted_at: offerAcceptedAt,
       onboarding_completed: true,
-      rating: profile.rating || 5.0,
+      rating: baseProfile.rating || 5.0,
     };
 
     try {
       if (!IS_MOCK_MODE && supabase) {
-        const { error } = await supabase.from('profiles').update({
-          full_name: completedProfile.full_name,
-          avatar_url: completedProfile.avatar_url,
-          city: completedProfile.city,
-          district: completedProfile.district,
-          skills: completedProfile.skills,
-          role: selectedRole,
-          offer_accepted_at: offerAcceptedAt,
-          onboarding_completed: true,
-        }).eq('id', profile.id);
+        const { data, error } = await supabase
+          .from('profiles')
+          .upsert(
+            {
+              id: userId,
+              phone: phone || null,
+              full_name: completedProfile.full_name,
+              avatar_url: completedProfile.avatar_url,
+              city: completedProfile.city,
+              district: completedProfile.district,
+              skills: completedProfile.skills,
+              role: selectedRole,
+              offer_accepted_at: offerAcceptedAt,
+              onboarding_completed: true,
+            },
+            { onConflict: 'id' }
+          )
+          .select()
+          .single();
 
-        if (error) throw error;
-      } else {
-        updateMockUserProfile(profile.id, completedProfile);
+        if (error) {
+          console.error('Profile setup upsert error:', error);
+          set({ error: error.message, isSubmitting: false });
+          return false;
+        }
+
+        const savedProfile = (data ?? completedProfile) as Profile;
+        const next = applyAuthState(savedProfile, phone, offerAcceptedAt);
+        set({ ...next, isSubmitting: false });
+        useAppStore.getState().syncUserFromAuth();
+        return true;
       }
 
-      const next = applyAuthState(completedProfile, pendingPhone || profile.phone, offerAcceptedAt);
+      updateMockUserProfile(userId, completedProfile);
+      const next = applyAuthState(completedProfile, phone, offerAcceptedAt);
       set({ ...next, isSubmitting: false });
+      useAppStore.getState().syncUserFromAuth();
+      return true;
     } catch (err) {
-      console.warn('[Актобе Жұмыс] Profile setup sync failed.', err);
-      const next = applyAuthState(completedProfile, pendingPhone || profile.phone, offerAcceptedAt);
-      set({ ...next, isSubmitting: false });
+      console.error('Profile setup failed:', err);
+      const message = err instanceof Error ? err.message : tStatic('error', loc);
+      set({ error: message, isSubmitting: false });
+      return false;
     }
   },
 

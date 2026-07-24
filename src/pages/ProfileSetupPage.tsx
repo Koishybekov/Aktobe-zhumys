@@ -6,7 +6,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AvatarUpload } from '@/components/auth/AvatarUpload';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useAppStore } from '@/store/useAppStore';
 import { AKTOBE_DISTRICTS, DEFAULT_CITY, WORKER_SKILL_CATEGORIES } from '@/lib/constants';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { cn } from '@/lib/utils';
@@ -15,7 +14,6 @@ export function ProfileSetupPage() {
   const navigate = useNavigate();
   const { t, locale, category } = useTranslation();
   const { profile, selectedRole, completeProfileSetup, isSubmitting, error } = useAuthStore();
-  const syncUserFromAuth = useAppStore((s) => s.syncUserFromAuth);
 
   const [fullName, setFullName] = useState(profile?.full_name ?? '');
   const [avatar, setAvatar] = useState<string | null>(profile?.avatar_url ?? null);
@@ -30,15 +28,16 @@ export function ProfileSetupPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await completeProfileSetup({
+    const ok = await completeProfileSetup({
       full_name: fullName.trim(),
       avatar_url: avatar,
       city: DEFAULT_CITY,
       district,
       skills: showSkills ? skills : [],
     });
-    syncUserFromAuth();
-    navigate('/', { replace: true });
+    if (ok) {
+      navigate('/', { replace: true });
+    }
   };
 
   const districtLabel = (d: (typeof AKTOBE_DISTRICTS)[number]) =>
