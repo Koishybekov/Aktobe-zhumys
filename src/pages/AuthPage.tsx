@@ -15,6 +15,7 @@ import {
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { OfferAgreementCheckbox } from '@/components/auth/PublicOfferModal';
 import { useAuthStore } from '@/store/useAuthStore';
+import { isOnboardingCompletedLocal } from '@/lib/authStorage';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { APP_NAME, ADMIN_WHATSAPP } from '@/lib/constants';
 import { openWhatsApp } from '@/lib/whatsapp';
@@ -45,7 +46,8 @@ export function AuthPage() {
     await register(phone, password, confirmPassword);
     const state = useAuthStore.getState();
     if (state.isAuthenticated) {
-      navigate(state.onboardingCompleted ? '/' : '/onboarding', { replace: true });
+      const done = state.onboardingCompleted || isOnboardingCompletedLocal();
+      navigate(done ? '/' : '/onboarding', { replace: true });
     }
   };
 
@@ -54,7 +56,8 @@ export function AuthPage() {
     await login(phone, password);
     const state = useAuthStore.getState();
     if (state.isAuthenticated) {
-      navigate(state.onboardingCompleted ? '/' : '/onboarding', { replace: true });
+      const done = state.onboardingCompleted || isOnboardingCompletedLocal();
+      navigate(done ? '/' : '/onboarding', { replace: true });
     }
   };
 

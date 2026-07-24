@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MapPin, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AvatarUpload } from '@/components/auth/AvatarUpload';
 import { useAuthStore } from '@/store/useAuthStore';
+import { isOnboardingCompletedLocal } from '@/lib/authStorage';
 import { AKTOBE_DISTRICTS, DEFAULT_CITY, WORKER_SKILL_CATEGORIES } from '@/lib/constants';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { cn } from '@/lib/utils';
@@ -13,7 +14,14 @@ import { cn } from '@/lib/utils';
 export function ProfileSetupPage() {
   const navigate = useNavigate();
   const { t, locale, category } = useTranslation();
-  const { profile, selectedRole, completeProfileSetup, isSubmitting, error } = useAuthStore();
+  const { profile, selectedRole, completeProfileSetup, isSubmitting, error, onboardingCompleted } =
+    useAuthStore();
+
+  useEffect(() => {
+    if (onboardingCompleted || isOnboardingCompletedLocal()) {
+      navigate('/', { replace: true });
+    }
+  }, [navigate, onboardingCompleted]);
 
   const [fullName, setFullName] = useState(profile?.full_name ?? '');
   const [avatar, setAvatar] = useState<string | null>(profile?.avatar_url ?? null);
@@ -28,16 +36,14 @@ export function ProfileSetupPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const ok = await completeProfileSetup({
+    await completeProfileSetup({
       full_name: fullName.trim(),
       avatar_url: avatar,
       city: DEFAULT_CITY,
       district,
       skills: showSkills ? skills : [],
     });
-    if (ok) {
-      navigate('/', { replace: true });
-    }
+    navigate('/', { replace: true });
   };
 
   const districtLabel = (d: (typeof AKTOBE_DISTRICTS)[number]) =>

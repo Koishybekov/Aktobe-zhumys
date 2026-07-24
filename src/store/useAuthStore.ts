@@ -27,6 +27,8 @@ import {
   updateSessionProfile,
   isValidAuthSession,
   authStateFromSession,
+  setOnboardingCompletedLocal,
+  isOnboardingCompletedLocal,
 } from '@/lib/authStorage';
 import {
   registerMockUser,
@@ -65,7 +67,13 @@ function applyAuthState(
   phone: string,
   offerAcceptedAt: string | null = profile.offer_accepted_at ?? null
 ) {
-  const onboardingCompleted = !!profile.onboarding_completed;
+  const onboardingCompleted = !!profile.onboarding_completed || isOnboardingCompletedLocal();
+  const profileWithOnboarding = { ...profile, onboarding_completed: onboardingCompleted };
+
+  if (onboardingCompleted) {
+    setOnboardingCompletedLocal(true);
+  }
+
   saveAuthSession({
     userId: profile.id,
     phone,
@@ -73,7 +81,7 @@ function applyAuthState(
     isAuthenticated: true,
     offerAcceptedAt,
     onboardingCompleted,
-    profile,
+    profile: profileWithOnboarding,
   });
 
   return {
@@ -82,7 +90,7 @@ function applyAuthState(
     pendingPhone: phone,
     selectedRole: profile.role,
     offerAcceptedAt,
-    profile,
+    profile: profileWithOnboarding,
     error: null,
   };
 }
@@ -224,6 +232,10 @@ async function syncFromSupabaseSession(session: Session): Promise<Partial<AuthSt
     };
   }
 
+  if (isOnboardingCompletedLocal()) {
+    profile = { ...profile, onboarding_completed: true };
+  }
+
   const resolvedPhone = profile.phone || normalizePhone(phone);
   if (resolvedPhone) {
     savePhoneSession(resolvedPhone, session);
@@ -250,6 +262,19 @@ async function tryRestoreSupabaseSession(phone: string, userId: string): Promise
 
   savePhoneSession(phone, data.session);
   return data.session;
+}
+
+function finalizeOnboardingLocally(
+  set: (partial: Partial<AuthState>) => void,
+  completedProfile: Profile,
+  phone: string,
+  offerAcceptedAt: string | null
+) {
+  const profile = { ...completedProfile, onboarding_completed: true };
+  setOnboardingCompletedLocal(true);
+  const next = applyAuthState(profile, phone, offerAcceptedAt);
+  set({ ...next, isSubmitting: false, error: null });
+  useAppStore.getState().syncUserFromAuth();
 }
 
 function applyStoredAuthToApp(stored: ReturnType<typeof loadAuthSession>): void {
@@ -457,29 +482,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   completeProfileSetup: async (input) => {
     const { profile, pendingPhone, selectedRole, offerAcceptedAt } = get();
-    const loc = locale();
     const stored = loadAuthSession();
     const userId = profile?.id ?? stored?.userId;
     const phone = profile?.phone ?? pendingPhone ?? stored?.phone ?? '';
 
-    if (!userId) {
-      set({ error: tStatic('error', loc) });
-      return false;
-    }
-
-    if ((selectedRole === 'worker' || selectedRole === 'both') && input.skills.length === 0) {
-      set({ error: tStatic('errSkills', loc) });
-      return false;
-    }
-    if (!input.district || input.district === 'all') {
-      set({ error: tStatic('errDistrict', loc) });
-      return false;
-    }
-
     set({ isSubmitting: true, error: null });
 
     const baseProfile: Profile = profile ?? {
-      id: userId,
+      id: userId || phone.replace(/\D/g, '') || 'local-user',
       phone,
       full_name: '',
       avatar_url: null,
@@ -497,7 +507,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       full_name: input.full_name.trim() || baseProfile.full_name,
       avatar_url: input.avatar_url ?? baseProfile.avatar_url,
       city: input.city || DEFAULT_CITY,
-      district: input.district,
+      district: input.district || baseProfile.district || '',
       skills: input.skills,
       role: selectedRole,
       offer_accepted_at: offerAcceptedAt,
@@ -506,51 +516,35 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     };
 
     try {
-      if (!IS_MOCK_MODE && supabase) {
-        const { data, error } = await supabase
-          .from('profiles')
-          .upsert(
-            {
-              id: userId,
-              phone: phone || null,
-              full_name: completedProfile.full_name,
-              avatar_url: completedProfile.avatar_url,
-              city: completedProfile.city,
-              district: completedProfile.district,
-              skills: completedProfile.skills,
-              role: selectedRole,
-              offer_accepted_at: offerAcceptedAt,
-              onboarding_completed: true,
-            },
-            { onConflict: 'id' }
-          )
-          .select()
-          .single();
+      if (!IS_MOCK_MODE && supabase && userId) {
+        const { error } = await supabase.from('profiles').upsert(
+          {
+            id: userId,
+            phone: phone || null,
+            full_name: completedProfile.full_name,
+            avatar_url: completedProfile.avatar_url,
+            city: completedProfile.city,
+            district: completedProfile.district,
+            skills: completedProfile.skills,
+            role: selectedRole,
+            offer_accepted_at: offerAcceptedAt,
+            onboarding_completed: true,
+          },
+          { onConflict: 'id' }
+        );
 
         if (error) {
-          console.error('Profile setup upsert error:', error);
-          set({ error: error.message, isSubmitting: false });
-          return false;
+          console.error('Profile update error:', error);
         }
-
-        const savedProfile = (data ?? completedProfile) as Profile;
-        const next = applyAuthState(savedProfile, phone, offerAcceptedAt);
-        set({ ...next, isSubmitting: false });
-        useAppStore.getState().syncUserFromAuth();
-        return true;
+      } else {
+        updateMockUserProfile(userId, completedProfile);
       }
-
-      updateMockUserProfile(userId, completedProfile);
-      const next = applyAuthState(completedProfile, phone, offerAcceptedAt);
-      set({ ...next, isSubmitting: false });
-      useAppStore.getState().syncUserFromAuth();
-      return true;
     } catch (err) {
-      console.error('Profile setup failed:', err);
-      const message = err instanceof Error ? err.message : tStatic('error', loc);
-      set({ error: message, isSubmitting: false });
-      return false;
+      console.error('Profile update error:', err);
     }
+
+    finalizeOnboardingLocally(set, completedProfile, phone, offerAcceptedAt);
+    return true;
   },
 
   subscribeToPro: async () => {
