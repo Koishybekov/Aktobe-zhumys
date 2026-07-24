@@ -10,7 +10,7 @@ import { ProSubscriptionModal } from '@/components/profile/ProSubscription';
 import { useToast } from '@/components/ui/use-toast';
 import { useAppStore } from '@/store/useAppStore';
 import { getActiveUserId } from '@/store/useAuthStore';
-import { CATEGORIES, DEFAULT_JOB_CITY } from '@/lib/constants';
+import { CATEGORIES, DEFAULT_JOB_CITY, isValidJobCategoryId, type JobCategoryId } from '@/lib/constants';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { hasActiveSubscription } from '@/lib/subscription';
 import {
@@ -46,7 +46,15 @@ export function CreateJobPage() {
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [phoneError, setPhoneError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<JobFieldKey, string>>>({});
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{
+    title: string;
+    company: string;
+    city: string;
+    salary: string;
+    description: string;
+    phone: string;
+    category: JobCategoryId | '';
+  }>({
     title: '',
     company: '',
     city: DEFAULT_JOB_CITY,
@@ -56,7 +64,7 @@ export function CreateJobPage() {
     category: '',
   });
 
-  const update = (field: string, value: string) => {
+  const update = (field: keyof typeof form, value: string) => {
     setForm((f) => ({ ...f, [field]: value }));
     if (field === 'phone') setPhoneError('');
     setFieldErrors((prev) => {
@@ -66,8 +74,29 @@ export function CreateJobPage() {
     });
   };
 
+  const handleCategoryChange = (value: string) => {
+    setForm((f) => ({ ...f, category: value as JobCategoryId }));
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next.category;
+      return next;
+    });
+  };
+
   const jobFieldToast = (field?: JobFieldKey, code?: string): string => {
-    const map: Record<string, string> = {
+    const codeMap: Record<string, string> = {
+      TITLE_REQUIRED: t('errJobTitle'),
+      COMPANY_REQUIRED: t('errJobCompany'),
+      DESCRIPTION_REQUIRED: t('errJobDescription'),
+      CATEGORY_REQUIRED: t('errJobCategory'),
+      SALARY_REQUIRED: t('errJobSalary'),
+      PHONE_REQUIRED: t('errPhoneRequired'),
+      CITY_REQUIRED: t('errJobCity'),
+      AUTH_REQUIRED: t('errJobAuth'),
+    };
+    if (code && codeMap[code]) return codeMap[code];
+
+    const fieldMap: Record<string, string> = {
       title: t('errJobTitle'),
       company: t('errJobCompany'),
       description: t('errJobDescription'),
@@ -77,7 +106,7 @@ export function CreateJobPage() {
       city: t('errJobCity'),
       auth: t('errJobAuth'),
     };
-    if (field && map[field]) return map[field];
+    if (field && fieldMap[field]) return fieldMap[field];
     if (code && code !== 'VALIDATION_FAILED' && code !== 'EMPTY_RESPONSE') return code;
     return t('errJobSubmit');
   };
@@ -104,7 +133,7 @@ export function CreateJobPage() {
     form.title.trim().length >= 3 &&
     form.company.trim().length >= 2 &&
     form.description.trim().length >= 10 &&
-    form.category &&
+    isValidJobCategoryId(form.category) &&
     Number(form.salary) >= 1000 &&
     isValidKzPhone(normalizePhone(form.phone));
 
@@ -128,12 +157,17 @@ export function CreateJobPage() {
         phone: normalizePhone(form.phone),
         category: form.category,
       });
+      if (isValidJobCategoryId(form.category)) {
+        delete validation.category;
+      }
       setFieldErrors(validation);
       const firstField = Object.keys(validation)[0] as JobFieldKey | undefined;
-      toast({
-        title: jobFieldToast(firstField, validation[firstField!]),
-        variant: 'error',
-      });
+      if (firstField) {
+        toast({
+          title: jobFieldToast(firstField, validation[firstField!]),
+          variant: 'error',
+        });
+      }
       return;
     }
 
@@ -162,7 +196,14 @@ export function CreateJobPage() {
         if (err.field) {
           setFieldErrors((prev) => ({ ...prev, [err.field!]: err.message }));
         }
-        toast({ title: jobFieldToast(err.field, err.message), variant: 'error' });
+        const showCategoryError =
+          err.field === 'category' && !isValidJobCategoryId(form.category);
+        toast({
+          title: showCategoryError
+            ? jobFieldToast(err.field, err.message)
+            : err.message || jobFieldToast(err.field, err.message),
+          variant: 'error',
+        });
       } else if (err instanceof Error) {
         toast({ title: err.message || t('errJobSubmit'), variant: 'error' });
       } else {
@@ -296,9 +337,16 @@ export function CreateJobPage() {
         </div>
 
         <div className="space-y-2">
-          <Label>{t('category')} *</Label>
-          <Select value={form.category} onValueChange={(v) => update('category', v)} disabled={formDisabled} required>
-            <SelectTrigger className={cn(fieldErrors.category && 'border-red-400')}>
+          <Label htmlFor="job-category">{t('category')} *</Label>
+          <Select
+            value={form.category || undefined}
+            onValueChange={handleCategoryChange}
+            disabled={formDisabled}
+          >
+            <SelectTrigger
+              id="job-category"
+              className={cn(fieldErrors.category && 'border-red-400')}
+            >
               <SelectValue placeholder={t('selectCategory')} />
             </SelectTrigger>
             <SelectContent>
@@ -309,6 +357,9 @@ export function CreateJobPage() {
               ))}
             </SelectContent>
           </Select>
+          {fieldErrors.category && !isValidJobCategoryId(form.category) && (
+            <p className="text-xs text-red-600">{t('errJobCategory')}</p>
+          )}
         </div>
 
         <Button type="submit" disabled={!isFormValid() || submitting || formDisabled} className="w-full" size="lg">

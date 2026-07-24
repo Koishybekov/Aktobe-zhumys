@@ -28,6 +28,15 @@ export const CATEGORIES = [
   { id: 'Other' },
 ] as const;
 
+/** Category ids stored in Supabase `jobs.category` (English keys, not localized labels). */
+export const JOB_CATEGORY_IDS = CATEGORIES.filter((c) => c.id !== 'all').map((c) => c.id);
+
+export type JobCategoryId = (typeof JOB_CATEGORY_IDS)[number];
+
+export function isValidJobCategoryId(value: string | undefined | null): value is JobCategoryId {
+  return !!value && (JOB_CATEGORY_IDS as readonly string[]).includes(value);
+}
+
 export const CATEGORY_COLORS: Record<string, string> = {
   Delivery: 'bg-blue-100 text-blue-700',
   Construction: 'bg-orange-100 text-orange-700',

@@ -1,6 +1,6 @@
 import type { PostgrestError } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
-import { DEFAULT_JOB_CITY } from '@/lib/constants';
+import { DEFAULT_JOB_CITY, isValidJobCategoryId } from '@/lib/constants';
 import { getActiveUserId } from '@/store/useAuthStore';
 import type { CreateJobInput, Job } from '@/types';
 
@@ -58,7 +58,7 @@ export function validateCreateJobInput(input: CreateJobInput): Partial<Record<Jo
   if (!input.description?.trim() || input.description.trim().length < 10) {
     errors.description = 'DESCRIPTION_REQUIRED';
   }
-  if (!input.category?.trim()) {
+  if (!isValidJobCategoryId(input.category?.trim())) {
     errors.category = 'CATEGORY_REQUIRED';
   }
   if (!input.phone?.trim()) {
@@ -86,7 +86,7 @@ export function buildJobInsertRow(input: CreateJobInput, ownerId: string) {
     title,
     company,
     description,
-    category: input.category,
+    category: input.category.trim(),
     salary,
     phone: input.phone,
     city,
@@ -110,7 +110,9 @@ export function mapSupabaseJobError(error: PostgrestError): JobSubmitError {
   if (combined.includes('description')) return new JobSubmitError(error.message, 'description');
   if (combined.includes('salary') || combined.includes('price')) return new JobSubmitError(error.message, 'salary');
   if (combined.includes('phone')) return new JobSubmitError(error.message, 'phone');
-  if (combined.includes('category')) return new JobSubmitError(error.message, 'category');
+  if (combined.includes('category') && !combined.includes('client_id')) {
+    return new JobSubmitError(error.message, 'category');
+  }
   if (combined.includes('city')) return new JobSubmitError(error.message, 'city');
 
   return new JobSubmitError(error.message);
