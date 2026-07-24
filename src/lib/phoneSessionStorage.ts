@@ -43,6 +43,10 @@ export function loadPhoneSession(phone: string): StoredPhoneSession | null {
   return loadMap()[key] ?? null;
 }
 
+export function clearAllPhoneSessions(): void {
+  localStorage.removeItem(PHONE_SESSIONS_KEY);
+}
+
 export function clearPhoneSession(phone: string): void {
   const key = normalizePhone(phone);
   const map = loadMap();

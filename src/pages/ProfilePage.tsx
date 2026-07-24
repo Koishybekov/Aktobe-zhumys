@@ -44,7 +44,6 @@ export function ProfilePage() {
   };
 
   const handleLogout = async () => {
-    useAppStore.getState().resetSession();
     await logout();
     navigate('/auth', { replace: true });
     toast({ title: t('signedOut'), variant: 'default' });

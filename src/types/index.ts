@@ -26,6 +26,7 @@ export interface Profile {
 export interface Job {
   id: string;
   client_id: string;
+  user_id?: string;
   title: string;
   company?: string;
   description: string;

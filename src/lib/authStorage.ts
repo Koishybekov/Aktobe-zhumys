@@ -37,6 +37,27 @@ export function createEmptyProfile(userId: string, phone: string, role: UserRole
   };
 }
 
+export function isValidAuthSession(session: AuthSession | null): session is AuthSession {
+  return Boolean(
+    session?.isAuthenticated &&
+      session.userId &&
+      session.phone &&
+      session.profile?.id
+  );
+}
+
+export function authStateFromSession(session: AuthSession) {
+  return {
+    isAuthenticated: true as const,
+    onboardingCompleted: session.onboardingCompleted,
+    pendingPhone: session.phone,
+    selectedRole: session.role,
+    offerAcceptedAt: session.offerAcceptedAt,
+    profile: session.profile,
+    error: null as string | null,
+  };
+}
+
 export function updateSessionProfile(session: AuthSession, profile: Profile): AuthSession {
   return {
     ...session,

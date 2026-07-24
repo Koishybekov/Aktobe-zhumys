@@ -22,6 +22,7 @@ import {
 } from '@/lib/jobPostLimit';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { normalizePhone, isValidKzPhone } from '@/lib/authPhone';
+import { JobSubmitError, validateCreateJobInput, type JobFieldKey } from '@/lib/jobCreate';
 import { cn } from '@/lib/utils';
 
 export function CreateJobPage() {
@@ -44,6 +45,7 @@ export function CreateJobPage() {
   const [submitting, setSubmitting] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [phoneError, setPhoneError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<JobFieldKey, string>>>({});
   const [form, setForm] = useState({
     title: '',
     company: '',
@@ -57,6 +59,27 @@ export function CreateJobPage() {
   const update = (field: string, value: string) => {
     setForm((f) => ({ ...f, [field]: value }));
     if (field === 'phone') setPhoneError('');
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next[field as JobFieldKey];
+      return next;
+    });
+  };
+
+  const jobFieldToast = (field?: JobFieldKey, code?: string): string => {
+    const map: Record<string, string> = {
+      title: t('errJobTitle'),
+      company: t('errJobCompany'),
+      description: t('errJobDescription'),
+      category: t('errJobCategory'),
+      salary: t('errJobSalary'),
+      phone: t('errPhoneRequired'),
+      city: t('errJobCity'),
+      auth: t('errJobAuth'),
+    };
+    if (field && map[field]) return map[field];
+    if (code && code !== 'VALIDATION_FAILED' && code !== 'EMPTY_RESPONSE') return code;
+    return t('errJobSubmit');
   };
 
   const openPaywall = () => {
@@ -96,11 +119,26 @@ export function CreateJobPage() {
     }
 
     if (!isFormValid()) {
-      toast({ title: t('errFormIncomplete'), variant: 'error' });
+      const validation = validateCreateJobInput({
+        title: form.title,
+        company: form.company,
+        city: form.city,
+        salary: Number(form.salary),
+        description: form.description,
+        phone: normalizePhone(form.phone),
+        category: form.category,
+      });
+      setFieldErrors(validation);
+      const firstField = Object.keys(validation)[0] as JobFieldKey | undefined;
+      toast({
+        title: jobFieldToast(firstField, validation[firstField!]),
+        variant: 'error',
+      });
       return;
     }
 
     setSubmitting(true);
+    setFieldErrors({});
     try {
       await createJob({
         title: form.title.trim(),
@@ -115,12 +153,20 @@ export function CreateJobPage() {
       toast({ title: t('jobPublished'), variant: 'success' });
       navigate('/');
     } catch (err) {
+      console.error('Job submit error:', err);
       if (err instanceof Error && err.message === 'POST_LIMIT') {
         openPaywall();
       } else if (err instanceof Error && err.message === 'SUPABASE_REQUIRED') {
         toast({ title: t('supabaseRequired'), variant: 'error' });
+      } else if (err instanceof JobSubmitError) {
+        if (err.field) {
+          setFieldErrors((prev) => ({ ...prev, [err.field!]: err.message }));
+        }
+        toast({ title: jobFieldToast(err.field, err.message), variant: 'error' });
+      } else if (err instanceof Error) {
+        toast({ title: err.message || t('errJobSubmit'), variant: 'error' });
       } else {
-        toast({ title: t('error'), variant: 'error' });
+        toast({ title: t('errJobSubmit'), variant: 'error' });
       }
     } finally {
       setSubmitting(false);
@@ -244,12 +290,15 @@ export function CreateJobPage() {
             />
           </div>
           {phoneError && <p className="text-xs text-red-600">{phoneError}</p>}
+          {fieldErrors.phone && !phoneError && (
+            <p className="text-xs text-red-600">{jobFieldToast('phone')}</p>
+          )}
         </div>
 
         <div className="space-y-2">
           <Label>{t('category')} *</Label>
           <Select value={form.category} onValueChange={(v) => update('category', v)} disabled={formDisabled} required>
-            <SelectTrigger>
+            <SelectTrigger className={cn(fieldErrors.category && 'border-red-400')}>
               <SelectValue placeholder={t('selectCategory')} />
             </SelectTrigger>
             <SelectContent>

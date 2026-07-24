@@ -22,6 +22,7 @@ import {
   getPostedJobCount,
 } from '@/lib/jobPostLimit';
 import { fetchJobsFromSupabase } from '@/lib/jobsApi';
+import { insertJobToSupabase, JobSubmitError, resolveAuthUserId } from '@/lib/jobCreate';
 import { updateMockUserProfileByPhone, findMockUserByPhone } from '@/lib/mockAuth';
 import { getProfileById } from '@/data/mockData';
 
@@ -491,38 +492,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   createJob: async (jobData) => {
     requireSupabaseForJobs();
 
-    const uid = userId();
+    const uid = get().currentUser.id && get().currentUser.id.length > 10
+      ? get().currentUser.id
+      : await resolveAuthUserId();
     const postedCount = getPostedJobCount(get().jobs, uid);
     if (!canPostJob(postedCount, get().currentUser)) {
       throw new Error('POST_LIMIT');
     }
 
-    const payload = {
-      title: jobData.title.trim(),
-      company: jobData.company.trim(),
-      city: jobData.city.trim() || DEFAULT_CITY,
-      salary: jobData.salary,
-      description: jobData.description.trim(),
-      phone: jobData.phone,
-      category: jobData.category,
-      client_id: uid,
-      status: 'open' as const,
-      selected_worker_id: null,
-      price: jobData.salary,
-      location_address: jobData.company.trim(),
-    };
-
-    const { data, error } = await supabase!.from('jobs').insert(payload).select().single();
-
-    if (error) throw error;
-    if (!data) throw new Error('Failed to create job');
-
-    const newJob = data as Job;
-
-    set((state) => ({
-      jobs: state.jobs.some((j) => j.id === newJob.id) ? state.jobs : [newJob, ...state.jobs],
-    }));
-    return newJob;
+    try {
+      const newJob = await insertJobToSupabase(jobData);
+      set((state) => ({
+        jobs: state.jobs.some((j) => j.id === newJob.id) ? state.jobs : [newJob, ...state.jobs],
+      }));
+      return newJob;
+    } catch (err) {
+      if (err instanceof JobSubmitError) throw err;
+      console.error('Job submit error:', err);
+      throw err;
+    }
   },
 
   sendMessage: async (jobId, content) => {

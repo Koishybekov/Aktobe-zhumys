@@ -17,6 +17,7 @@ import {
   savePhoneSession,
   loadPhoneSession,
   clearPhoneSession,
+  clearAllPhoneSessions,
 } from '@/lib/phoneSessionStorage';
 import { subscriptionExpiresAt } from '@/lib/subscription';
 import {
@@ -24,12 +25,15 @@ import {
   saveAuthSession,
   clearAuthSession,
   updateSessionProfile,
+  isValidAuthSession,
+  authStateFromSession,
 } from '@/lib/authStorage';
 import {
   registerMockUser,
   verifyMockLogin,
   updateMockUserProfile,
 } from '@/lib/mockAuth';
+import { useAppStore } from '@/store/useAppStore';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -228,6 +232,31 @@ async function syncFromSupabaseSession(session: Session): Promise<Partial<AuthSt
   return applyAuthState(profile, resolvedPhone);
 }
 
+async function tryRestoreSupabaseSession(phone: string, userId: string): Promise<Session | null> {
+  if (!supabase) return null;
+
+  const stored = loadPhoneSession(phone);
+  if (!stored || stored.userId !== userId) return null;
+
+  const { data, error } = await supabase.auth.setSession({
+    access_token: stored.access_token,
+    refresh_token: stored.refresh_token,
+  });
+
+  if (error || !data.session) {
+    console.warn('[Актобе Жұмыс] Could not restore Supabase session from localStorage:', error?.message);
+    return null;
+  }
+
+  savePhoneSession(phone, data.session);
+  return data.session;
+}
+
+function applyStoredAuthToApp(stored: ReturnType<typeof loadAuthSession>): void {
+  if (!isValidAuthSession(stored)) return;
+  useAppStore.getState().syncUserFromAuth();
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   isAuthenticated: false,
   onboardingCompleted: false,
@@ -242,21 +271,43 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   hydrate: async () => {
     set({ isHydrating: true, error: null });
 
+    const stored = loadAuthSession();
+
     try {
-      if (IS_MOCK_MODE || !supabase) {
-        const session = loadAuthSession();
-        if (session?.isAuthenticated && session.profile) {
-          set({
-            isAuthenticated: true,
-            onboardingCompleted: session.onboardingCompleted,
-            pendingPhone: session.phone,
-            selectedRole: session.role,
-            offerAcceptedAt: session.offerAcceptedAt,
-            profile: session.profile,
-            isHydrating: false,
-          });
+      // 1) Restore from localStorage first (survives F5 / refresh)
+      if (isValidAuthSession(stored)) {
+        if (IS_MOCK_MODE || !supabase) {
+          set({ ...authStateFromSession(stored), isHydrating: false });
+          applyStoredAuthToApp(stored);
           return;
         }
+
+        const { data: { session: liveSession } } = await supabase.auth.getSession();
+
+        if (liveSession?.user?.id === stored.userId) {
+          const next = await syncFromSupabaseSession(liveSession);
+          set({ ...next, isHydrating: false });
+          applyStoredAuthToApp(stored);
+          return;
+        }
+
+        const restored = await tryRestoreSupabaseSession(stored.phone, stored.userId);
+        if (restored) {
+          const next = await syncFromSupabaseSession(restored);
+          set({ ...next, isHydrating: false });
+          applyStoredAuthToApp(stored);
+          return;
+        }
+
+        // Supabase tokens expired — keep local session so user stays in the app
+        console.warn('[Актобе Жұмыс] Using persisted local auth (Supabase session unavailable)');
+        set({ ...authStateFromSession(stored), isHydrating: false });
+        applyStoredAuthToApp(stored);
+        return;
+      }
+
+      // 2) No localStorage session — try live Supabase session only
+      if (IS_MOCK_MODE || !supabase) {
         set({ isHydrating: false });
         return;
       }
@@ -267,6 +318,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (session?.user) {
         const next = await syncFromSupabaseSession(session);
         set({ ...next, isHydrating: false });
+        applyStoredAuthToApp(loadAuthSession());
         return;
       }
 
@@ -279,17 +331,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       });
     } catch (err) {
       console.warn('[Актобе Жұмыс] Auth hydrate failed:', err);
-      const session = loadAuthSession();
-      if (session?.isAuthenticated && session.profile) {
-        set({
-          isAuthenticated: true,
-          onboardingCompleted: session.onboardingCompleted,
-          pendingPhone: session.phone,
-          selectedRole: session.role,
-          offerAcceptedAt: session.offerAcceptedAt,
-          profile: session.profile,
-          isHydrating: false,
-        });
+      if (isValidAuthSession(stored)) {
+        set({ ...authStateFromSession(stored), isHydrating: false });
+        applyStoredAuthToApp(stored);
       } else {
         set({ isHydrating: false });
       }
@@ -301,6 +345,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
+        if (get().isHydrating) return;
+        const persisted = loadAuthSession();
+        if (isValidAuthSession(persisted)) return;
+
         clearAuthSession();
         set({
           isAuthenticated: false,
@@ -315,6 +363,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) {
         const next = await syncFromSupabaseSession(session);
         set(next);
+        applyStoredAuthToApp(loadAuthSession());
       }
     });
 
@@ -496,10 +545,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     const phone = get().profile?.phone ?? get().pendingPhone;
     if (phone) clearPhoneSession(phone);
+    clearAllPhoneSessions();
+    clearAuthSession();
+    useAppStore.getState().resetSession();
+
     if (!IS_MOCK_MODE && supabase) {
       await supabase.auth.signOut();
     }
-    clearAuthSession();
+
     set({
       isAuthenticated: false,
       onboardingCompleted: false,
@@ -515,5 +568,5 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 }));
 
 export function getActiveUserId(): string {
-  return useAuthStore.getState().getUserId() || loadAuthSession()?.userId || 'user-001';
+  return useAuthStore.getState().getUserId() || loadAuthSession()?.userId || '';
 }
