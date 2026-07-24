@@ -29,6 +29,7 @@ import {
   authStateFromSession,
   setOnboardingCompletedLocal,
   isOnboardingCompletedLocal,
+  forceCompleteOnboardingRedirect,
 } from '@/lib/authStorage';
 import {
   registerMockUser,
@@ -264,6 +265,38 @@ async function tryRestoreSupabaseSession(phone: string, userId: string): Promise
   return data.session;
 }
 
+/** Best-effort Supabase save — schema gaps must never block onboarding. */
+async function saveProfileSetupToSupabase(
+  userId: string,
+  phone: string,
+  completedProfile: Profile,
+  selectedRole: UserRole
+): Promise<void> {
+  if (IS_MOCK_MODE || !supabase || !userId) return;
+
+  try {
+    // Minimal payload: omit optional columns that may be missing in older schemas
+    // (e.g. offer_accepted_at, avatar_url, skills, onboarding_completed).
+    const { error } = await supabase.from('profiles').upsert(
+      {
+        id: userId,
+        phone: phone || null,
+        full_name: completedProfile.full_name,
+        city: completedProfile.city,
+        district: completedProfile.district,
+        role: selectedRole,
+      },
+      { onConflict: 'id' }
+    );
+
+    if (error) {
+      console.error('Profile update error:', error);
+    }
+  } catch (err) {
+    console.error('Profile update error:', err);
+  }
+}
+
 function finalizeOnboardingLocally(
   set: (partial: Partial<AuthState>) => void,
   completedProfile: Profile,
@@ -486,8 +519,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const userId = profile?.id ?? stored?.userId;
     const phone = profile?.phone ?? pendingPhone ?? stored?.phone ?? '';
 
-    set({ isSubmitting: true, error: null });
-
     const baseProfile: Profile = profile ?? {
       id: userId || phone.replace(/\D/g, '') || 'local-user',
       phone,
@@ -516,34 +547,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     };
 
     try {
-      if (!IS_MOCK_MODE && supabase && userId) {
-        const { error } = await supabase.from('profiles').upsert(
-          {
-            id: userId,
-            phone: phone || null,
-            full_name: completedProfile.full_name,
-            avatar_url: completedProfile.avatar_url,
-            city: completedProfile.city,
-            district: completedProfile.district,
-            skills: completedProfile.skills,
-            role: selectedRole,
-            offer_accepted_at: offerAcceptedAt,
-            onboarding_completed: true,
-          },
-          { onConflict: 'id' }
-        );
-
-        if (error) {
-          console.error('Profile update error:', error);
-        }
-      } else {
-        updateMockUserProfile(userId, completedProfile);
+      if (IS_MOCK_MODE || !supabase) {
+        if (userId) updateMockUserProfile(userId, completedProfile);
+      } else if (userId) {
+        await saveProfileSetupToSupabase(userId, phone, completedProfile, selectedRole);
       }
     } catch (err) {
       console.error('Profile update error:', err);
     }
 
     finalizeOnboardingLocally(set, completedProfile, phone, offerAcceptedAt);
+    forceCompleteOnboardingRedirect();
     return true;
   },
 

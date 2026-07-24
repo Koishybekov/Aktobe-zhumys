@@ -16,6 +16,11 @@ export function setOnboardingCompletedLocal(completed: boolean): void {
   }
 }
 
+export function forceCompleteOnboardingRedirect(): void {
+  localStorage.setItem(ONBOARDING_COMPLETED_KEY, 'true');
+  window.location.href = '/';
+}
+
 export function clearOnboardingCompletedLocal(): void {
   localStorage.removeItem(ONBOARDING_COMPLETED_KEY);
 }

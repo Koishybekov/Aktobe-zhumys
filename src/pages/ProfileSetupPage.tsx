@@ -1,27 +1,28 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { MapPin, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AvatarUpload } from '@/components/auth/AvatarUpload';
 import { useAuthStore } from '@/store/useAuthStore';
-import { isOnboardingCompletedLocal } from '@/lib/authStorage';
+import {
+  forceCompleteOnboardingRedirect,
+  isOnboardingCompletedLocal,
+} from '@/lib/authStorage';
 import { AKTOBE_DISTRICTS, DEFAULT_CITY, WORKER_SKILL_CATEGORIES } from '@/lib/constants';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { cn } from '@/lib/utils';
 
 export function ProfileSetupPage() {
-  const navigate = useNavigate();
   const { t, locale, category } = useTranslation();
-  const { profile, selectedRole, completeProfileSetup, isSubmitting, error, onboardingCompleted } =
+  const { profile, selectedRole, completeProfileSetup, isSubmitting, onboardingCompleted } =
     useAuthStore();
 
   useEffect(() => {
     if (onboardingCompleted || isOnboardingCompletedLocal()) {
-      navigate('/', { replace: true });
+      forceCompleteOnboardingRedirect();
     }
-  }, [navigate, onboardingCompleted]);
+  }, [onboardingCompleted]);
 
   const [fullName, setFullName] = useState(profile?.full_name ?? '');
   const [avatar, setAvatar] = useState<string | null>(profile?.avatar_url ?? null);
@@ -36,14 +37,18 @@ export function ProfileSetupPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await completeProfileSetup({
-      full_name: fullName.trim(),
-      avatar_url: avatar,
-      city: DEFAULT_CITY,
-      district,
-      skills: showSkills ? skills : [],
-    });
-    navigate('/', { replace: true });
+    try {
+      await completeProfileSetup({
+        full_name: fullName.trim(),
+        avatar_url: avatar,
+        city: DEFAULT_CITY,
+        district,
+        skills: showSkills ? skills : [],
+      });
+    } catch (err) {
+      console.error('Profile update error:', err);
+      forceCompleteOnboardingRedirect();
+    }
   };
 
   const districtLabel = (d: (typeof AKTOBE_DISTRICTS)[number]) =>
@@ -132,8 +137,6 @@ export function ProfileSetupPage() {
               </div>
             </div>
           )}
-
-          {error && <p className="text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{error}</p>}
 
           <Button type="submit" className="w-full" size="lg" disabled={isSubmitting}>
             {isSubmitting ? t('saving') : t('enterApp')}
