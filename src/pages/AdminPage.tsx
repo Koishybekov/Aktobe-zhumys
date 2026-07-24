@@ -9,7 +9,8 @@ import { useAppStore } from '@/store/useAppStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { isAdminPhone } from '@/lib/admin';
 import { normalizePhone } from '@/lib/authPhone';
-import { hasActiveSubscription } from '@/lib/subscription';
+import { phoneFromAuthEmail } from '@/lib/profileLookup';
+import { hasActivePro } from '@/lib/subscription';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 
 export function AdminPage() {
@@ -18,9 +19,10 @@ export function AdminPage() {
   const { toast } = useToast();
   const profile = useAuthStore((s) => s.profile);
   const isPro = useAuthStore((s) => s.isPro);
+  const refreshProfile = useAuthStore((s) => s.refreshProfile);
   const adminActivateSubscription = useAppStore((s) => s.adminActivateSubscription);
 
-  const [targetPhone, setTargetPhone] = useState('');
+  const [targetIdentifier, setTargetIdentifier] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastActivated, setLastActivated] = useState<string | null>(null);
 
@@ -38,28 +40,38 @@ export function AdminPage() {
   }
 
   const handleActivate = async () => {
-    const normalized = normalizePhone(targetPhone);
-    if (!normalized || normalized.length < 11) {
+    const trimmed = targetIdentifier.trim();
+    const isEmail = trimmed.includes('@');
+    const normalized = isEmail ? trimmed.toLowerCase() : normalizePhone(trimmed);
+
+    if (isEmail) {
+      if (!phoneFromAuthEmail(normalized)) {
+        toast({ title: t('adminInvalidEmail'), variant: 'error' });
+        return;
+      }
+    } else if (!normalized || normalized.length < 11) {
       toast({ title: t('errPhone'), variant: 'error' });
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const activated = await adminActivateSubscription(normalized);
+      const activated = await adminActivateSubscription(trimmed);
       if (!activated) {
         toast({ title: t('adminUserNotFound'), variant: 'error' });
         return;
       }
-      setLastActivated(normalized);
-      setTargetPhone('');
+      await refreshProfile();
+      setLastActivated(isEmail ? normalized : normalized);
+      setTargetIdentifier('');
       toast({
         title: t('adminActivated'),
-        description: `${normalized} · ${activated.full_name || t('userFallback')}`,
+        description: `${activated.phone || normalized} · ${activated.full_name || t('userFallback')}`,
         variant: 'success',
       });
-    } catch {
-      toast({ title: t('error'), variant: 'error' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('error');
+      toast({ title: message, variant: 'error' });
     } finally {
       setIsSubmitting(false);
     }
@@ -89,15 +101,15 @@ export function AdminPage() {
         </div>
 
         <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm space-y-4">
-          <Label htmlFor="admin-phone">{t('adminTargetPhone')}</Label>
+          <Label htmlFor="admin-phone">{t('adminTargetPhoneOrEmail')}</Label>
           <div className="relative">
             <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
             <Input
               id="admin-phone"
-              type="tel"
-              placeholder={t('phonePlaceholder')}
-              value={targetPhone}
-              onChange={(e) => setTargetPhone(e.target.value)}
+              type="text"
+              placeholder={t('adminTargetPlaceholder')}
+              value={targetIdentifier}
+              onChange={(e) => setTargetIdentifier(e.target.value)}
               className="pl-10"
             />
           </div>
@@ -147,5 +159,5 @@ export function useIsPro() {
 export function useIsSubscribed() {
   const isPro = useAuthStore((s) => s.isPro);
   const currentUser = useAppStore((s) => s.currentUser);
-  return isPro || hasActiveSubscription(currentUser);
+  return isPro || hasActivePro(currentUser);
 }

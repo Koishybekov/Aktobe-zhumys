@@ -19,8 +19,8 @@ interface ProSubscriptionModalProps {
   onClose: () => void;
   userPhone: string;
   paywall?: boolean;
-  /** seeker = job view limit, employer = job post limit */
-  paywallContext?: 'seeker' | 'employer';
+  /** seeker = job view limit, employer = job post limit, apply = job application */
+  paywallContext?: 'seeker' | 'employer' | 'apply';
 }
 
 export function ProSubscriptionModal({ open, onClose, userPhone, paywall, paywallContext = 'seeker' }: ProSubscriptionModalProps) {
@@ -28,8 +28,18 @@ export function ProSubscriptionModal({ open, onClose, userPhone, paywall, paywal
 
   const benefits = [t('proBenefit1'), t('proBenefit2'), t('proBenefit3')];
 
-  const paywallTitle = paywallContext === 'employer' ? t('paywallPostTitle') : t('paywallTitle');
-  const paywallDesc = paywallContext === 'employer' ? t('paywallPostDesc') : t('paywallDesc');
+  const paywallTitle =
+    paywallContext === 'employer'
+      ? t('paywallPostTitle')
+      : paywallContext === 'apply'
+        ? t('paywallApplyTitle')
+        : t('paywallTitle');
+  const paywallDesc =
+    paywallContext === 'employer'
+      ? t('paywallPostDesc')
+      : paywallContext === 'apply'
+        ? t('paywallApplyDesc')
+        : t('paywallDesc');
 
   const handleWhatsAppReceipt = () => {
     openWhatsApp(ADMIN_WHATSAPP, buildPaymentReceiptMessage(userPhone));

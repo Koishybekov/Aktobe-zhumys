@@ -1,6 +1,6 @@
 import { Crown } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { computeIsPro } from '@/lib/subscription';
+import { isProActive } from '@/lib/subscription';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import type { Profile } from '@/types';
 
@@ -13,7 +13,7 @@ interface ProBadgeProps {
 export function ProBadge({ profile, size = 'sm', className }: ProBadgeProps) {
   const { t } = useTranslation();
 
-  if (!profile || !computeIsPro(profile)) return null;
+  if (!profile || !isProActive(profile)) return null;
 
   return (
     <span

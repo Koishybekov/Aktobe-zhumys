@@ -10,14 +10,24 @@ export type ProProfileFields = Pick<
   'is_pro' | 'pro_expires_at' | 'is_subscribed' | 'subscribed_until'
 >;
 
-/** Strict PRO check: is_pro === true AND pro_expires_at > now. */
+/**
+ * Active PRO: is_pro === true AND (no expiry OR pro_expires_at > now).
+ * Null pro_expires_at = lifetime PRO.
+ */
+export function isProActive(
+  profile: Pick<Profile, 'is_pro' | 'pro_expires_at'> | null | undefined
+): boolean {
+  return (
+    Boolean(profile?.is_pro) &&
+    (!profile?.pro_expires_at || new Date(profile.pro_expires_at) > new Date())
+  );
+}
+
+/** @deprecated Use isProActive */
 export function computeIsPro(
   profile: Pick<Profile, 'is_pro' | 'pro_expires_at'> | null | undefined
 ): boolean {
-  if (!profile?.is_pro) return false;
-  if (!profile.pro_expires_at) return false;
-  const expiresAt = new Date(profile.pro_expires_at);
-  return !Number.isNaN(expiresAt.getTime()) && expiresAt > new Date();
+  return isProActive(profile);
 }
 
 function parseExpiry(value: string | null | undefined): number | null {
@@ -40,7 +50,7 @@ export function getProExpiry(profile: ProProfileFields): string | null {
  * Also accepts legacy is_subscribed + subscribed_until when is_pro is not set.
  */
 export function hasActivePro(profile: ProProfileFields): boolean {
-  if (computeIsPro(profile)) return true;
+  if (isProActive(profile)) return true;
 
   if (profile.is_subscribed === true) {
     if (!profile.subscribed_until) return true;
@@ -58,7 +68,20 @@ export function hasActiveSubscription(profile: ProProfileFields): boolean {
 
 /** Visual PRO badge — only when subscription is currently active. */
 export function hasProBadge(profile: ProProfileFields): boolean {
-  return computeIsPro(profile) || hasActivePro(profile);
+  return isProActive(profile) || hasActivePro(profile);
+}
+
+/** Payload written when admin grants PRO (30 days). */
+export function buildProGrantUpdate(profile: Profile): Partial<Profile> {
+  const now = new Date().toISOString();
+  const expires = subscriptionExpiresAt();
+  return {
+    is_pro: true,
+    pro_expires_at: expires,
+    is_subscribed: true,
+    subscribed_until: expires,
+    pro_since: profile.pro_since ?? now,
+  };
 }
 
 export function subscriptionExpiresAt(): string {
@@ -68,15 +91,7 @@ export function subscriptionExpiresAt(): string {
 }
 
 export function buildSubscriptionActivation(profile: Profile): Partial<Profile> {
-  const now = new Date().toISOString();
-  const expires = subscriptionExpiresAt();
-  return {
-    is_subscribed: true,
-    subscribed_until: expires,
-    pro_expires_at: expires,
-    is_pro: true,
-    pro_since: profile.pro_since ?? now,
-  };
+  return buildProGrantUpdate(profile);
 }
 
 export function formatSubscriptionExpiry(

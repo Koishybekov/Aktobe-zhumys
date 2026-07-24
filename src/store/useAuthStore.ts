@@ -19,7 +19,7 @@ import {
   clearPhoneSession,
   clearAllPhoneSessions,
 } from '@/lib/phoneSessionStorage';
-import { buildSubscriptionActivation, hasActivePro, computeIsPro, PROFILE_SELECT, normalizeProfileProFields } from '@/lib/subscription';
+import { buildSubscriptionActivation, hasActivePro, isProActive, PROFILE_SELECT, normalizeProfileProFields } from '@/lib/subscription';
 import {
   loadAuthSession,
   saveAuthSession,
@@ -67,7 +67,7 @@ function locale() {
 
 function sessionStateWithPro(stored: NonNullable<ReturnType<typeof loadAuthSession>>) {
   const state = authStateFromSession(stored);
-  return { ...state, isPro: computeIsPro(state.profile) };
+  return { ...state, isPro: isProActive(state.profile) };
 }
 
 function applyAuthState(
@@ -102,7 +102,7 @@ function applyAuthState(
     selectedRole: profileWithOnboarding.role,
     offerAcceptedAt,
     profile: profileWithOnboarding,
-    isPro: computeIsPro(profileWithOnboarding),
+    isPro: isProActive(profileWithOnboarding),
     error: null,
   };
 }
@@ -509,7 +509,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const current = get().profile;
       if (current) {
         const normalized = normalizeProfileProFields(current);
-        set({ profile: normalized, isPro: computeIsPro(normalized) });
+        set({ profile: normalized, isPro: isProActive(normalized) });
         useAppStore.getState().syncUserFromAuth();
       }
       return;

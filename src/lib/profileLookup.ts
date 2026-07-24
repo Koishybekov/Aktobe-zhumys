@@ -1,5 +1,5 @@
 import { supabase, IS_MOCK_MODE } from '@/lib/supabase';
-import { normalizePhone, phoneDigitsOnly } from '@/lib/authPhone';
+import { normalizePhone, phoneDigitsOnly, phoneToAuthEmail, phoneToAuthEmailLegacy } from '@/lib/authPhone';
 import { PROFILE_SELECT, normalizeProfileProFields } from '@/lib/subscription';
 import type { Profile } from '@/types';
 
@@ -47,4 +47,58 @@ export async function findProfileByPhone(phone: string): Promise<Profile | null>
 export function findProfileByPhoneInList(phone: string, profiles: Profile[]): Profile | null {
   const normalized = normalizePhone(phone);
   return profiles.find((p) => phonesMatch(p.phone, normalized)) ?? null;
+}
+
+/** Parse synthetic auth email back to normalized phone, if possible. */
+export function phoneFromAuthEmail(email: string): string | null {
+  const trimmed = email.trim().toLowerCase();
+  const userMatch = trimmed.match(/^user_(\d+)@example\.com$/);
+  if (userMatch) {
+    const digits = userMatch[1];
+    return normalizePhone(digits.length === 11 ? `+${digits}` : digits);
+  }
+  const legacyMatch = trimmed.match(/^(\d+)@phone\.aktobe-zhumys\.kz$/);
+  if (legacyMatch) {
+    return normalizePhone(legacyMatch[1]);
+  }
+  return null;
+}
+
+function findProfileByAuthEmailInList(email: string, profiles: Profile[]): Profile | null {
+  const fromEmail = phoneFromAuthEmail(email);
+  if (fromEmail) return findProfileByPhoneInList(fromEmail, profiles);
+
+  const normalizedEmail = email.trim().toLowerCase();
+  for (const profile of profiles) {
+    if (!profile.phone) continue;
+    const primary = phoneToAuthEmail(profile.phone).toLowerCase();
+    const legacy = phoneToAuthEmailLegacy(profile.phone).toLowerCase();
+    if (primary === normalizedEmail || legacy === normalizedEmail) return profile;
+  }
+  return null;
+}
+
+/** Find profile by phone number or Supabase auth email (user_XXX@example.com). */
+export async function findProfileByIdentifier(identifier: string): Promise<Profile | null> {
+  const trimmed = identifier.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.includes('@')) {
+    const phone = phoneFromAuthEmail(trimmed);
+    if (phone) return findProfileByPhone(phone);
+    return null;
+  }
+
+  return findProfileByPhone(trimmed);
+}
+
+export function findProfileByIdentifierInList(identifier: string, profiles: Profile[]): Profile | null {
+  const trimmed = identifier.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.includes('@')) {
+    return findProfileByAuthEmailInList(trimmed, profiles);
+  }
+
+  return findProfileByPhoneInList(trimmed, profiles);
 }

@@ -10,7 +10,7 @@ import { JobCardSkeleton } from '@/components/ui/skeleton';
 import { ProSubscriptionModal } from '@/components/profile/ProSubscription';
 import { useToast } from '@/components/ui/use-toast';
 import { useAppStore } from '@/store/useAppStore';
-import { getActiveUserId } from '@/store/useAuthStore';
+import { getActiveUserId, useAuthStore } from '@/store/useAuthStore';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { hasActiveSubscription } from '@/lib/subscription';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -18,7 +18,6 @@ import {
   tryRecordJobView,
   getRemainingFreeViews,
   syncJobViewsFromProfile,
-  isPaywallActive,
   canOpenJobDetails,
   FREE_JOB_VIEW_LIMIT,
 } from '@/lib/jobViewLimit';
@@ -42,10 +41,13 @@ export function ExplorePage() {
   const hasApplied = useAppStore((s) => s.hasApplied);
   const getProfile = useAppStore((s) => s.getProfile);
   const getOpenJobs = useAppStore((s) => s.getOpenJobs);
+  const isPro = useAuthStore((s) => s.isPro);
+  const refreshProfile = useAuthStore((s) => s.refreshProfile);
 
   const { toast } = useToast();
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [paywallOpen, setPaywallOpen] = useState(false);
+  const [paywallContext, setPaywallContext] = useState<'seeker' | 'apply'>('seeker');
   const [viewCount, setViewCount] = useState(0);
 
   const userId = getActiveUserId();
@@ -56,6 +58,10 @@ export function ExplorePage() {
   useEffect(() => {
     void fetchJobs();
   }, [fetchJobs]);
+
+  useEffect(() => {
+    void refreshProfile();
+  }, [refreshProfile]);
 
   useEffect(() => {
     const state = syncJobViewsFromProfile(userId, currentUser.viewed_job_ids);
@@ -73,10 +79,14 @@ export function ExplorePage() {
     [updateProfile]
   );
 
-  const openPaywall = useCallback(() => {
+  const openPaywall = useCallback((context: 'seeker' | 'apply' = 'seeker') => {
+    setPaywallContext(context);
     setSelectedJob(null);
     setPaywallOpen(true);
-    toast({ title: t('paywallBlocked'), variant: 'default' });
+    toast({
+      title: context === 'apply' ? t('paywallApplyTitle') : t('paywallBlocked'),
+      variant: 'default',
+    });
   }, [toast, t]);
 
   const handleJobSelect = useCallback(
@@ -100,11 +110,13 @@ export function ExplorePage() {
   );
 
   const handleApply = async (job: Job) => {
-    if (!subscribed && isPaywallActive(userId, currentUser) && !canOpenJobDetails(userId, job.id, currentUser)) {
-      openPaywall();
+    if (hasApplied(job.id)) return;
+
+    if (!isPro) {
+      openPaywall('apply');
       return;
     }
-    if (hasApplied(job.id)) return;
+
     try {
       await applyToJob(job.id);
       toast({ title: t('applicationSentToast'), description: t('applicationSentDesc'), variant: 'success' });
@@ -224,6 +236,7 @@ export function ExplorePage() {
         onClose={() => setPaywallOpen(false)}
         userPhone={currentUser.phone}
         paywall
+        paywallContext={paywallContext}
       />
     </div>
   );

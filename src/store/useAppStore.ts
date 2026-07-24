@@ -17,13 +17,13 @@ import { generateId } from '@/lib/utils';
 import { loadAuthSession, saveAuthSession, updateSessionProfile } from '@/lib/authStorage';
 import { getActiveUserId, useAuthStore } from '@/store/useAuthStore';
 import { normalizePhone } from '@/lib/authPhone';
-import { buildSubscriptionActivation, PROFILE_SELECT, normalizeProfileProFields, computeIsPro } from '@/lib/subscription';
+import { buildProGrantUpdate, isProActive, PROFILE_SELECT, normalizeProfileProFields } from '@/lib/subscription';
 import {
   canPostJob,
   getPostedJobCount,
 } from '@/lib/jobPostLimit';
 import { fetchJobsFromSupabase } from '@/lib/jobsApi';
-import { findProfileByPhone, findProfileByPhoneInList } from '@/lib/profileLookup';
+import { findProfileByIdentifier, findProfileByIdentifierInList } from '@/lib/profileLookup';
 import { insertJobToSupabase, JobSubmitError, resolveAuthUserId } from '@/lib/jobCreate';
 import { updateMockUserProfileByPhone, findMockUserByPhone } from '@/lib/mockAuth';
 import { getProfileById } from '@/data/mockData';
@@ -75,7 +75,7 @@ interface AppState {
   submitReview: (input: ReviewInput) => Promise<void>;
   updateProfile: (updates: Partial<Profile>) => Promise<void>;
   subscribeToPro: () => Promise<void>;
-  adminActivateSubscription: (targetPhone: string) => Promise<Profile | null>;
+  adminActivateSubscription: (targetIdentifier: string) => Promise<Profile | null>;
   updateProfileById: (id: string, updates: Partial<Profile>) => Promise<void>;
 }
 
@@ -578,7 +578,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       saveAuthSession(updateSessionProfile(session, nextProfile));
       useAuthStore.setState({
         profile: nextProfile,
-        isPro: computeIsPro(nextProfile),
+        isPro: isProActive(nextProfile),
       });
     }
 
@@ -612,57 +612,92 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const session = loadAuthSession();
     if (session?.profile?.id === id) {
-      const nextProfile = { ...session.profile, ...updates };
+      const nextProfile = normalizeProfileProFields({ ...session.profile, ...updates });
       saveAuthSession(updateSessionProfile(session, nextProfile));
-      useAuthStore.setState({ profile: nextProfile });
+      useAuthStore.setState({
+        profile: nextProfile,
+        isPro: isProActive(nextProfile),
+      });
     }
+
+    await useAuthStore.getState().refreshProfile();
   },
 
-  adminActivateSubscription: async (targetPhone) => {
-    const normalized = normalizePhone(targetPhone);
+  adminActivateSubscription: async (targetIdentifier) => {
+    const trimmed = targetIdentifier.trim();
+    const lookupPhone = trimmed.includes('@')
+      ? null
+      : normalizePhone(trimmed);
 
-    let target: Profile | null = findProfileByPhoneInList(normalized, get().profiles);
+    let target: Profile | null = findProfileByIdentifierInList(trimmed, get().profiles);
 
     if (!target && !IS_MOCK_MODE && supabase) {
-      target = await findProfileByPhone(normalized);
+      target = await findProfileByIdentifier(trimmed);
     }
 
     if (!target) {
-      target = findMockUserByPhone(normalized)?.profile ?? null;
+      target = lookupPhone
+        ? findMockUserByPhone(lookupPhone)?.profile ?? null
+        : null;
     }
 
     if (!target?.id) return null;
 
-    const activation = buildSubscriptionActivation(target);
-    const updated: Profile = normalizeProfileProFields({ ...target, ...activation });
+    const proUpdate = buildProGrantUpdate(target);
+    let updated: Profile = normalizeProfileProFields({ ...target, ...proUpdate });
 
     if (!IS_MOCK_MODE && supabase) {
-      const { error: rpcError } = await supabase.rpc('admin_activate_subscription', {
-        target_phone: normalized,
-      });
-      if (rpcError) {
-        const { error } = await supabase
-          .from('profiles')
-          .update(activation)
-          .eq('id', target.id);
-        if (error) throw error;
-      } else {
-        const refreshed = await findProfileByPhone(normalized);
-        if (refreshed) Object.assign(updated, refreshed);
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({
+          is_pro: true,
+          pro_expires_at: proUpdate.pro_expires_at,
+          is_subscribed: true,
+          subscribed_until: proUpdate.subscribed_until,
+          pro_since: proUpdate.pro_since,
+        })
+        .eq('id', target.id)
+        .select(PROFILE_SELECT)
+        .single();
+
+      if (error) {
+        console.error('Admin PRO grant update failed:', error);
+        const rpcPhone = lookupPhone ?? target.phone;
+        if (rpcPhone) {
+          const { error: rpcError } = await supabase.rpc('admin_activate_subscription', {
+            target_phone: normalizePhone(rpcPhone),
+          });
+          if (rpcError) {
+            console.error('Admin PRO grant RPC failed:', rpcError);
+            throw rpcError;
+          }
+        } else {
+          throw error;
+        }
+        const refreshed = await findProfileByIdentifier(trimmed);
+        if (refreshed) updated = refreshed;
+      } else if (data) {
+        updated = normalizeProfileProFields(data as Profile);
       }
-    } else {
-      updateMockUserProfileByPhone(normalized, activation);
+    } else if (lookupPhone) {
+      updateMockUserProfileByPhone(lookupPhone, proUpdate);
     }
 
-    await get().updateProfileById(target.id, updated);
     set((state) => ({
       profiles: upsertProfileList(state.profiles, updated),
       currentUser: state.currentUser.id === target!.id ? updated : state.currentUser,
     }));
 
-    if (getActiveUserId() === target.id) {
-      await useAuthStore.getState().refreshProfile();
+    const session = loadAuthSession();
+    if (session?.profile?.id === target.id) {
+      saveAuthSession(updateSessionProfile(session, updated));
+      useAuthStore.setState({
+        profile: updated,
+        isPro: isProActive(updated),
+      });
     }
+
+    await useAuthStore.getState().refreshProfile();
 
     return updated;
   },
