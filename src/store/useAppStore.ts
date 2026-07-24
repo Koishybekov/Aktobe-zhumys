@@ -6,6 +6,8 @@ import type {
   JobApplication,
   Review,
   ChatMessage,
+  Conversation,
+  Message,
   ActiveMode,
   CreateJobInput,
   ReviewInput,
@@ -27,6 +29,10 @@ import { findProfileByIdentifier, findProfileByIdentifierInList } from '@/lib/pr
 import { insertJobToSupabase, JobSubmitError, resolveAuthUserId } from '@/lib/jobCreate';
 import { updateMockUserProfileByPhone, findMockUserByPhone } from '@/lib/mockAuth';
 import { getProfileById } from '@/data/mockData';
+import {
+  findConversationForJobAndWorker,
+  sortConversationsByRecent,
+} from '@/lib/conversationsApi';
 
 interface AppState {
   currentUser: Profile;
@@ -36,6 +42,8 @@ interface AppState {
   applications: JobApplication[];
   reviews: Review[];
   messages: ChatMessage[];
+  conversations: Conversation[];
+  conversationMessages: Message[];
   selectedCity: string;
   selectedDistrict: string;
   selectedCategory: string;
@@ -66,6 +74,15 @@ interface AppState {
   getJobMessages: (jobId: string) => ChatMessage[];
   getActiveChatJobs: () => Job[];
   getActiveChatCount: () => number;
+  getMyConversations: () => Conversation[];
+  getConversationCount: () => number;
+  getConversationMessages: (conversationId: string) => Message[];
+  findConversationForJob: (jobId: string) => string | null;
+  findOrCreateConversationForJob: (jobId: string, introMessage: string) => Promise<string>;
+  sendConversationMessage: (conversationId: string, content: string) => Promise<void>;
+  hasUserReviewedJob: (jobId: string) => boolean;
+  getPendingReviewJobs: () => Job[];
+  getReviewTargetForJob: (job: Job) => { targetId: string; targetName: string };
 
   applyToJob: (jobId: string) => Promise<void>;
   acceptWorker: (jobId: string, workerId: string) => Promise<void>;
@@ -110,6 +127,8 @@ function loadMockState() {
     applications: [] as JobApplication[],
     reviews: [] as Review[],
     messages: [] as ChatMessage[],
+    conversations: [] as Conversation[],
+    conversationMessages: [] as Message[],
     profiles: user.id ? [user] : [],
     currentUser: user,
     selectedCity: user.city ?? DEFAULT_CITY,
@@ -144,6 +163,14 @@ function upsertProfileList(profiles: Profile[], profile: Profile): Profile[] {
   if (idx === -1) return [...profiles, profile];
   const next = [...profiles];
   next[idx] = profile;
+  return next;
+}
+
+function upsertConversation(conversations: Conversation[], conversation: Conversation): Conversation[] {
+  const idx = conversations.findIndex((c) => c.id === conversation.id);
+  if (idx === -1) return [...conversations, conversation];
+  const next = [...conversations];
+  next[idx] = conversation;
   return next;
 }
 
@@ -200,6 +227,20 @@ function setupRealtime(set: (fn: (state: AppState) => Partial<AppState>) => void
         return { messages: [...state.messages, row] };
       });
     })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversations' }, (payload) => {
+      const row = payload.new as Conversation;
+      set((state) => {
+        if (state.conversations.some((c) => c.id === row.id)) return {};
+        return { conversations: [...state.conversations, row] };
+      });
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+      const row = payload.new as Message;
+      set((state) => {
+        if (state.conversationMessages.some((m) => m.id === row.id)) return {};
+        return { conversationMessages: [...state.conversationMessages, row] };
+      });
+    })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reviews' }, (payload) => {
       const row = payload.new as Review;
       set((state) => {
@@ -230,6 +271,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   applications: [],
   reviews: [],
   messages: [],
+  conversations: [],
+  conversationMessages: [],
   selectedCity: DEFAULT_CITY,
   selectedDistrict: 'all',
   selectedCategory: 'all',
@@ -253,22 +296,31 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       const uid = userId();
-      const [jobsResult, appsRes, reviewsRes, messagesRes, profilesRes, profileRes] = await withTimeout(
+      const [jobsResult, appsRes, reviewsRes, messagesRes, convRes, convMsgRes, profilesRes, profileRes] = await withTimeout(
         Promise.all([
           fetchJobsFromSupabase(),
           supabase.from('job_applications').select('*'),
           supabase.from('reviews').select('*'),
           supabase.from('chat_messages').select('*').order('created_at', { ascending: true }),
+          supabase.from('conversations').select('*').or(`worker_id.eq.${uid},client_id.eq.${uid}`),
+          supabase.from('messages').select('*').order('created_at', { ascending: true }),
           supabase.from('profiles').select(PROFILE_SELECT),
           supabase.from('profiles').select(PROFILE_SELECT).eq('id', uid).maybeSingle(),
         ]),
         12000
       );
 
+      const convIds = new Set((convRes.data ?? []).map((c: Conversation) => c.id));
+      const filteredConvMessages = (convMsgRes.data ?? []).filter((m: Message) =>
+        convIds.has(m.conversation_id)
+      );
+
       const errors = [
         appsRes.error,
         reviewsRes.error,
         messagesRes.error,
+        convRes.error,
+        convMsgRes.error,
         profilesRes.error,
         profileRes.error,
       ].filter(Boolean);
@@ -288,6 +340,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         applications: appsRes.data ?? [],
         reviews: reviewsRes.data ?? [],
         messages: messagesRes.data ?? [],
+        conversations: convRes.data ?? [],
+        conversationMessages: filteredConvMessages,
         profiles,
         currentUser: profile,
         selectedCity: profile.city ?? DEFAULT_CITY,
@@ -362,6 +416,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       applications: [],
       reviews: [],
       messages: [],
+      conversations: [],
+      conversationMessages: [],
       profiles: [],
       initialized: false,
       isLoading: false,
@@ -414,6 +470,159 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   getActiveChatCount: () => get().getActiveChatJobs().length,
+
+  getMyConversations: () => {
+    const uid = userId();
+    const mine = get().conversations.filter((c) => c.worker_id === uid || c.client_id === uid);
+    return sortConversationsByRecent(mine, get().conversationMessages);
+  },
+
+  getConversationCount: () => get().getMyConversations().length,
+
+  getConversationMessages: (conversationId) =>
+    get()
+      .conversationMessages.filter((m) => m.conversation_id === conversationId)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+
+  findConversationForJob: (jobId) => {
+    const uid = userId();
+    const existing = findConversationForJobAndWorker(get().conversations, jobId, uid);
+    return existing?.id ?? null;
+  },
+
+  findOrCreateConversationForJob: async (jobId, introMessage) => {
+    const uid = userId();
+    const job = get().jobs.find((j) => j.id === jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.client_id === uid) throw new Error('Cannot apply to own job');
+
+    const cached = findConversationForJobAndWorker(get().conversations, jobId, uid);
+    if (cached) return cached.id;
+
+    if (!IS_MOCK_MODE && supabase) {
+      const { data: found, error: findErr } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('job_id', jobId)
+        .eq('worker_id', uid)
+        .maybeSingle();
+
+      if (findErr) console.warn('[Chat] Conversation lookup failed:', findErr);
+
+      if (found) {
+        const conv = found as Conversation;
+        set((state) => ({ conversations: upsertConversation(state.conversations, conv) }));
+        return conv.id;
+      }
+
+      const { data: conv, error: convErr } = await supabase
+        .from('conversations')
+        .insert({ job_id: jobId, worker_id: uid, client_id: job.client_id })
+        .select()
+        .single();
+
+      if (convErr) throw convErr;
+
+      const { data: msg, error: msgErr } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id: conv.id,
+          sender_id: uid,
+          content: introMessage,
+          is_system: true,
+        })
+        .select()
+        .single();
+
+      if (msgErr) console.warn('[Chat] Initial message failed:', msgErr);
+
+      set((state) => ({
+        conversations: upsertConversation(state.conversations, conv as Conversation),
+        conversationMessages: msg
+          ? [...state.conversationMessages, msg as Message]
+          : state.conversationMessages,
+      }));
+
+      return conv.id;
+    }
+
+    const conv: Conversation = {
+      id: generateId(),
+      job_id: jobId,
+      worker_id: uid,
+      client_id: job.client_id,
+      created_at: new Date().toISOString(),
+    };
+    const msg: Message = {
+      id: generateId(),
+      conversation_id: conv.id,
+      sender_id: uid,
+      content: introMessage,
+      is_system: true,
+      created_at: new Date().toISOString(),
+    };
+
+    set((state) => ({
+      conversations: [...state.conversations, conv],
+      conversationMessages: [...state.conversationMessages, msg],
+    }));
+
+    return conv.id;
+  },
+
+  sendConversationMessage: async (conversationId, content) => {
+    const uid = userId();
+    const payload = {
+      conversation_id: conversationId,
+      sender_id: uid,
+      content,
+      is_system: false,
+    };
+
+    if (!IS_MOCK_MODE && supabase) {
+      const { data, error } = await supabase.from('messages').insert(payload).select().single();
+      if (error) throw error;
+      set((state) => ({
+        conversationMessages: state.conversationMessages.some((m) => m.id === data.id)
+          ? state.conversationMessages
+          : [...state.conversationMessages, data as Message],
+      }));
+      return;
+    }
+
+    const msg: Message = {
+      id: generateId(),
+      ...payload,
+      created_at: new Date().toISOString(),
+    };
+    set((state) => ({
+      conversationMessages: [...state.conversationMessages, msg],
+    }));
+  },
+
+  hasUserReviewedJob: (jobId) => {
+    const uid = userId();
+    return get().reviews.some((r) => r.job_id === jobId && r.reviewer_id === uid);
+  },
+
+  getPendingReviewJobs: () => {
+    const uid = userId();
+    return get().jobs.filter((job) => {
+      if (job.status !== 'completed') return false;
+      const isClient = job.client_id === uid;
+      const isWorker = job.selected_worker_id === uid;
+      if (!isClient && !isWorker) return false;
+      return !get().hasUserReviewedJob(job.id);
+    });
+  },
+
+  getReviewTargetForJob: (job) => {
+    const uid = userId();
+    if (job.client_id === uid && job.selected_worker_id) {
+      return { targetId: job.selected_worker_id, targetName: 'worker' };
+    }
+    return { targetId: job.client_id, targetName: 'client' };
+  },
 
   applyToJob: async (jobId) => {
     const uid = userId();
@@ -495,6 +704,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   completeJob: async (jobId) => {
+    const uid = userId();
+    const job = get().jobs.find((j) => j.id === jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.client_id !== uid) throw new Error('Only job owner can complete');
+    if (job.status !== 'in_progress') throw new Error('Job is not in progress');
+
     if (!IS_MOCK_MODE && supabase) {
       const { error } = await supabase.from('jobs').update({ status: 'completed' }).eq('id', jobId);
       if (error) throw error;
@@ -558,8 +773,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   submitReview: async (input) => {
     const uid = userId();
-    const newReview: Review = {
-      id: generateId(),
+    const payload = {
       job_id: input.job_id,
       reviewer_id: uid,
       target_id: input.target_id,
@@ -568,18 +782,62 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
 
     if (!IS_MOCK_MODE && supabase) {
-      const { data, error } = await supabase.from('reviews').insert(newReview).select().single();
-      if (error) throw error;
-      if (data) newReview.id = data.id;
-    } else {
-      await delay(300);
+      const { data, error } = await supabase.from('reviews').insert(payload).select().single();
+      if (error) {
+        if (error.code === '23505') return;
+        throw error;
+      }
+      if (data) {
+        set((state) => ({
+          reviews: state.reviews.some((r) => r.id === data.id)
+            ? state.reviews
+            : [...state.reviews, data as Review],
+        }));
+
+        const { data: targetProfile } = await supabase
+          .from('profiles')
+          .select(PROFILE_SELECT)
+          .eq('id', input.target_id)
+          .maybeSingle();
+
+        if (targetProfile) {
+          const normalized = normalizeProfileProFields(targetProfile as Profile);
+          set((state) => ({
+            profiles: upsertProfileList(state.profiles, normalized),
+            currentUser: state.currentUser.id === normalized.id ? normalized : state.currentUser,
+          }));
+        }
+      }
+      return;
     }
 
-    set((state) => ({
-      reviews: state.reviews.some((r) => r.id === newReview.id)
-        ? state.reviews
-        : [...state.reviews, newReview],
-    }));
+    const newReview: Review = {
+      id: generateId(),
+      ...payload,
+      created_at: new Date().toISOString(),
+    };
+
+    await delay(300);
+
+    set((state) => {
+      const targetReviews = [...state.reviews, newReview].filter((r) => r.target_id === input.target_id);
+      const avg = targetReviews.reduce((sum, r) => sum + r.rating, 0) / targetReviews.length;
+      const profiles = state.profiles.map((p) =>
+        p.id === input.target_id ? { ...p, rating: Math.round(avg * 100) / 100 } : p
+      );
+      const currentUser =
+        state.currentUser.id === input.target_id
+          ? { ...state.currentUser, rating: Math.round(avg * 100) / 100 }
+          : state.currentUser;
+
+      return {
+        reviews: state.reviews.some((r) => r.id === newReview.id)
+          ? state.reviews
+          : [...state.reviews, newReview],
+        profiles,
+        currentUser,
+      };
+    });
   },
 
   updateProfile: async (updates) => {

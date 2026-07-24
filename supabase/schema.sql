@@ -71,6 +71,25 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS conversations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  job_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  worker_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  client_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(job_id, worker_id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  content TEXT NOT NULL,
+  is_system BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_city ON jobs(city);
 CREATE INDEX IF NOT EXISTS idx_jobs_district ON jobs(district);
@@ -78,6 +97,10 @@ CREATE INDEX IF NOT EXISTS idx_jobs_client ON jobs(client_id);
 CREATE INDEX IF NOT EXISTS idx_applications_job ON job_applications(job_id);
 CREATE INDEX IF NOT EXISTS idx_applications_worker ON job_applications(worker_id);
 CREATE INDEX IF NOT EXISTS idx_messages_job ON chat_messages(job_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_job ON conversations(job_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_worker ON conversations(worker_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_client ON conversations(client_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_target ON reviews(target_id);
 CREATE INDEX IF NOT EXISTS idx_profiles_phone ON profiles(phone);
 
@@ -86,6 +109,8 @@ ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE job_applications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Public profiles are viewable by everyone" ON profiles FOR SELECT USING (true);
 CREATE POLICY "Users can update own profile" ON profiles FOR UPDATE USING (auth.uid() = id);
@@ -122,6 +147,29 @@ CREATE POLICY "Participants can send messages" ON chat_messages
       SELECT client_id FROM jobs WHERE id = job_id
       UNION
       SELECT selected_worker_id FROM jobs WHERE id = job_id
+    )
+  );
+
+CREATE POLICY "Participants can view conversations" ON conversations
+  FOR SELECT USING (auth.uid() = worker_id OR auth.uid() = client_id);
+
+CREATE POLICY "Workers can create conversations" ON conversations
+  FOR INSERT WITH CHECK (auth.uid() = worker_id);
+
+CREATE POLICY "Participants can view messages" ON messages
+  FOR SELECT USING (
+    conversation_id IN (
+      SELECT id FROM conversations
+      WHERE worker_id = auth.uid() OR client_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Participants can send conversation messages" ON messages
+  FOR INSERT WITH CHECK (
+    auth.uid() = sender_id
+    AND conversation_id IN (
+      SELECT id FROM conversations
+      WHERE worker_id = auth.uid() OR client_id = auth.uid()
     )
   );
 
@@ -165,5 +213,7 @@ CREATE TRIGGER on_review_created
 ALTER PUBLICATION supabase_realtime ADD TABLE jobs;
 ALTER PUBLICATION supabase_realtime ADD TABLE job_applications;
 ALTER PUBLICATION supabase_realtime ADD TABLE chat_messages;
+ALTER PUBLICATION supabase_realtime ADD TABLE conversations;
+ALTER PUBLICATION supabase_realtime ADD TABLE messages;
 ALTER PUBLICATION supabase_realtime ADD TABLE reviews;
 ALTER PUBLICATION supabase_realtime ADD TABLE profiles;

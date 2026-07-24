@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Search, AlertCircle, RefreshCw } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -13,7 +14,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { getActiveUserId, useAuthStore } from '@/store/useAuthStore';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { hasActiveSubscription, isProActive } from '@/lib/subscription';
-import { openJobWhatsAppContact } from '@/lib/jobContact';
+import { buildApplyIntroMessage } from '@/lib/conversationsApi';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import {
   tryRecordJobView,
@@ -25,6 +26,7 @@ import {
 import type { Job } from '@/types';
 
 export function ExplorePage() {
+  const navigate = useNavigate();
   const { t } = useTranslation();
   const jobsLoading = useAppStore((s) => s.jobsLoading);
   const jobsError = useAppStore((s) => s.jobsError);
@@ -38,6 +40,8 @@ export function ExplorePage() {
   const setSelectedDistrict = useAppStore((s) => s.setSelectedDistrict);
   const setSearchQuery = useAppStore((s) => s.setSearchQuery);
   const applyToJob = useAppStore((s) => s.applyToJob);
+  const findOrCreateConversationForJob = useAppStore((s) => s.findOrCreateConversationForJob);
+  const findConversationForJob = useAppStore((s) => s.findConversationForJob);
   const updateProfile = useAppStore((s) => s.updateProfile);
   const hasApplied = useAppStore((s) => s.hasApplied);
   const getProfile = useAppStore((s) => s.getProfile);
@@ -111,6 +115,11 @@ export function ExplorePage() {
   );
 
   const handleApply = async (job: Job) => {
+    const existingConv = findConversationForJob(job.id);
+    if (hasApplied(job.id) && existingConv) {
+      navigate(`/chat/${existingConv}`);
+      return;
+    }
     if (hasApplied(job.id)) return;
 
     const profile = authProfile ?? currentUser;
@@ -121,27 +130,17 @@ export function ExplorePage() {
       return;
     }
 
-    const client = getProfile(job.client_id);
-
     try {
-      await applyToJob(job.id);
-    } catch (err) {
-      console.warn('[Apply] Failed to save application:', err);
-    }
+      if (!hasApplied(job.id)) {
+        await applyToJob(job.id);
+      }
 
-    const opened = openJobWhatsAppContact(job, client, t('whatsappMessage'));
-    if (opened) {
-      toast({
-        title: t('applicationSentToast'),
-        description: t('applicationSentDesc'),
-        variant: 'success',
-      });
-    } else {
-      toast({
-        title: t('applicationSentToast'),
-        description: t('noContactPhone'),
-        variant: 'default',
-      });
+      const intro = buildApplyIntroMessage(job.title?.trim() || t('notSpecified'), t('chatApplyIntro'));
+      const conversationId = await findOrCreateConversationForJob(job.id, intro);
+      navigate(`/chat/${conversationId}`);
+    } catch (err) {
+      console.warn('[Apply] Failed:', err);
+      toast({ title: t('error'), variant: 'error' });
     }
   };
 

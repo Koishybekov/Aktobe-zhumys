@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { Profile, Job, JobApplication, Review, ChatMessage } from '@/types';
+import type { Profile, Job, JobApplication, Review, ChatMessage, Conversation, Message } from '@/types';
 
 /** Supabase project URL — set in `.env` as VITE_SUPABASE_URL */
 const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL ?? '').trim();
@@ -46,6 +46,8 @@ export type Database = {
       job_applications: { Row: JobApplication; Insert: Omit<JobApplication, 'id' | 'created_at'> & { id?: string; created_at?: string }; Update: Partial<JobApplication> };
       reviews: { Row: Review; Insert: Omit<Review, 'id'> & { id?: string }; Update: Partial<Review> };
       chat_messages: { Row: ChatMessage; Insert: Omit<ChatMessage, 'id' | 'created_at'> & { id?: string; created_at?: string }; Update: Partial<ChatMessage> };
+      conversations: { Row: Conversation; Insert: Omit<Conversation, 'id' | 'created_at'> & { id?: string; created_at?: string; updated_at?: string }; Update: Partial<Conversation> };
+      messages: { Row: Message; Insert: Omit<Message, 'id' | 'created_at'> & { id?: string; created_at?: string }; Update: Partial<Message> };
     };
   };
 };

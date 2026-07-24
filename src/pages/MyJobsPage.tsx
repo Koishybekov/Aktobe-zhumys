@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Users, ChevronDown, ChevronUp, CheckCircle } from 'lucide-react';
+import { Users, ChevronDown, ChevronUp, CheckCircle, Star } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -13,7 +13,16 @@ import { formatPrice, formatRelativeTime, getInitials, getJobSalary } from '@/li
 import type { Job } from '@/types';
 
 function ClientJobsTab() {
-  const { getMyClientJobs, getApplicationsForJob, getProfile, acceptWorker, completeJob, submitReview } = useAppStore();
+  const {
+    getMyClientJobs,
+    getApplicationsForJob,
+    getProfile,
+    acceptWorker,
+    completeJob,
+    submitReview,
+    hasUserReviewedJob,
+    getReviewTargetForJob,
+  } = useAppStore();
   const { toast } = useToast();
   const { t } = useTranslation();
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
@@ -27,16 +36,21 @@ function ClientJobsTab() {
   };
 
   const handleComplete = async (job: Job) => {
-    await completeJob(job.id);
-    setReviewJob(job);
-    toast({ title: t('jobCompleted'), description: t('jobCompletedDesc'), variant: 'success' });
+    try {
+      await completeJob(job.id);
+      setReviewJob(job);
+      toast({ title: t('jobCompleted'), description: t('jobCompletedDesc'), variant: 'success' });
+    } catch {
+      toast({ title: t('error'), variant: 'error' });
+    }
   };
 
   const handleReview = async (rating: number, comment: string) => {
-    if (!reviewJob?.selected_worker_id) return;
+    if (!reviewJob) return;
+    const target = getReviewTargetForJob(reviewJob);
     await submitReview({
       job_id: reviewJob.id,
-      target_id: reviewJob.selected_worker_id,
+      target_id: target.targetId,
       rating,
       comment,
     });
@@ -59,6 +73,7 @@ function ClientJobsTab() {
           const apps = getApplicationsForJob(job.id);
           const pendingApps = apps.filter((a) => a.status === 'pending');
           const isExpanded = expandedJob === job.id;
+          const needsReview = job.status === 'completed' && !hasUserReviewedJob(job.id);
 
           return (
             <Card key={job.id} className="overflow-hidden">
@@ -120,9 +135,19 @@ function ClientJobsTab() {
                     variant="secondary"
                     size="sm"
                     className="w-full mt-3"
-                    onClick={() => handleComplete(job)}
+                    onClick={() => void handleComplete(job)}
                   >
-                    <CheckCircle className="h-4 w-4" /> {t('markCompleted')}
+                    <CheckCircle className="h-4 w-4" /> {t('markCompletedJob')}
+                  </Button>
+                )}
+
+                {needsReview && (
+                  <Button
+                    size="sm"
+                    className="w-full mt-3"
+                    onClick={() => setReviewJob(job)}
+                  >
+                    <Star className="h-4 w-4" /> {t('leaveReview')}
                   </Button>
                 )}
               </CardContent>
@@ -136,8 +161,8 @@ function ClientJobsTab() {
         onClose={() => setReviewJob(null)}
         onSubmit={handleReview}
         targetName={
-          reviewJob?.selected_worker_id
-            ? getProfile(reviewJob.selected_worker_id)?.full_name ?? t('workerLabel')
+          reviewJob
+            ? getProfile(getReviewTargetForJob(reviewJob).targetId)?.full_name ?? t('workerLabel')
             : t('workerLabel')
         }
       />
@@ -146,24 +171,26 @@ function ClientJobsTab() {
 }
 
 function WorkerJobsTab() {
-  const { getMyWorkerApplications, jobs, completeJob, submitReview, getProfile } = useAppStore();
+  const {
+    getMyWorkerApplications,
+    jobs,
+    submitReview,
+    getProfile,
+    hasUserReviewedJob,
+    getReviewTargetForJob,
+  } = useAppStore();
   const { toast } = useToast();
   const { t } = useTranslation();
   const [reviewJob, setReviewJob] = useState<Job | null>(null);
 
   const myApps = getMyWorkerApplications();
 
-  const handleComplete = async (job: Job) => {
-    await completeJob(job.id);
-    setReviewJob(job);
-    toast({ title: t('jobCompleted'), description: t('jobCompletedDesc'), variant: 'success' });
-  };
-
   const handleReview = async (rating: number, comment: string) => {
     if (!reviewJob) return;
+    const target = getReviewTargetForJob(reviewJob);
     await submitReview({
       job_id: reviewJob.id,
-      target_id: reviewJob.client_id,
+      target_id: target.targetId,
       rating,
       comment,
     });
@@ -186,6 +213,7 @@ function WorkerJobsTab() {
           const job = jobs.find((j) => j.id === app.job_id);
           if (!job) return null;
           const client = getProfile(job.client_id);
+          const needsReview = job.status === 'completed' && !hasUserReviewedJob(job.id);
 
           return (
             <Card key={app.id}>
@@ -200,17 +228,16 @@ function WorkerJobsTab() {
                       </p>
                     )}
                   </div>
-                  <StatusBadge status={app.status} />
+                  <StatusBadge status={job.status === 'completed' ? 'completed' : app.status} />
                 </div>
 
-                {app.status === 'accepted' && job.status === 'in_progress' && (
+                {needsReview && (
                   <Button
-                    variant="secondary"
                     size="sm"
                     className="w-full mt-3"
-                    onClick={() => handleComplete(job)}
+                    onClick={() => setReviewJob(job)}
                   >
-                    <CheckCircle className="h-4 w-4" /> {t('markCompleted')}
+                    <Star className="h-4 w-4" /> {t('leaveReview')}
                   </Button>
                 )}
               </CardContent>
@@ -223,7 +250,11 @@ function WorkerJobsTab() {
         open={!!reviewJob}
         onClose={() => setReviewJob(null)}
         onSubmit={handleReview}
-        targetName={reviewJob ? getProfile(reviewJob.client_id)?.full_name ?? t('clientLabel') : t('clientLabel')}
+        targetName={
+          reviewJob
+            ? getProfile(getReviewTargetForJob(reviewJob).targetId)?.full_name ?? t('clientLabel')
+            : t('clientLabel')
+        }
       />
     </>
   );
@@ -255,4 +286,3 @@ export function MyJobsPage() {
     </div>
   );
 }
-

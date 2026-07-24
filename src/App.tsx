@@ -8,6 +8,7 @@ import { ExplorePage } from '@/pages/ExplorePage';
 import { CreateJobPage } from '@/pages/CreateJobPage';
 import { MyJobsPage } from '@/pages/MyJobsPage';
 import { MessagesPage } from '@/pages/MessagesPage';
+import { ChatPage } from '@/pages/ChatPage';
 import { ProfilePage } from '@/pages/ProfilePage';
 import { AuthPage } from '@/pages/AuthPage';
 import { ProfileSetupPage } from '@/pages/ProfileSetupPage';
@@ -100,6 +101,7 @@ export default function App() {
               <Route path="create" element={<CreateJobPage />} />
               <Route path="my-jobs" element={<MyJobsPage />} />
               <Route path="messages" element={<MessagesPage />} />
+              <Route path="chat/:conversationId" element={<ChatPage />} />
               <Route path="profile" element={<ProfilePage />} />
             </Route>
             <Route path="*" element={<Navigate to="/auth" replace />} />

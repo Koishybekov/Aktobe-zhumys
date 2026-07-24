@@ -2,7 +2,6 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { Compass, PlusCircle, Briefcase, MessageCircle, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/store/useAppStore';
-import { getActiveUserId } from '@/store/useAuthStore';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 
 export function BottomNav() {
@@ -17,23 +16,13 @@ export function BottomNav() {
     { to: '/profile', icon: User, label: t('navProfile') },
   ];
 
-  const activeChatCount = useAppStore((s) => {
-    const uid = getActiveUserId();
-    return s.jobs.reduce(
-      (count, j) =>
-        j.status === 'in_progress' &&
-        (j.client_id === uid || j.selected_worker_id === uid)
-          ? count + 1
-          : count,
-      0
-    );
-  });
+  const activeChatCount = useAppStore((s) => s.getConversationCount());
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-gray-100 bg-white/95 backdrop-blur-lg safe-bottom md:hidden">
       <div className="flex items-center justify-around px-2 py-2">
         {navItems.map(({ to, icon: Icon, label }) => {
-          const isActive = location.pathname === to;
+          const isActive = location.pathname === to || (to === '/messages' && location.pathname.startsWith('/chat/'));
           const showBadge = to === '/messages' && activeChatCount > 0;
           return (
             <NavLink

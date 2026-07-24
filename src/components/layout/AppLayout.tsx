@@ -7,6 +7,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useAppStore } from '@/store/useAppStore';
+import { PendingReviewPrompt } from '@/components/reviews/PendingReviewPrompt';
 import { APP_NAME } from '@/lib/constants';
 
 export function AppLayout() {
@@ -63,6 +64,7 @@ export function AppLayout() {
       </main>
 
       <BottomNav />
+      <PendingReviewPrompt />
     </div>
   );
 }

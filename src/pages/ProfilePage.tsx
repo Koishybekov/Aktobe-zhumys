@@ -45,6 +45,7 @@ export function ProfilePage() {
     reviews,
     isLoading,
     syncUserFromAuth,
+    getProfile,
   } = useAppStore();
   const authProfile = useAuthStore((s) => s.profile);
   const isAuthHydrating = useAuthStore((s) => s.isHydrating);
@@ -87,6 +88,11 @@ export function ProfilePage() {
   }).length;
 
   const myReviews = (reviews ?? []).filter((r) => r?.target_id === userId);
+  const averageRating = useMemo(() => {
+    if (myReviews.length === 0) return profile.rating ?? 0;
+    const sum = myReviews.reduce((acc, r) => acc + (r.rating ?? 0), 0);
+    return Math.round((sum / myReviews.length) * 100) / 100;
+  }, [myReviews, profile.rating]);
 
   const toggleMode = () => {
     const newMode = activeMode === 'client' ? 'worker' : 'client';
@@ -184,9 +190,9 @@ export function ProfilePage() {
             </div>
             <div className="flex items-center gap-1 mt-1">
               <Star className="h-4 w-4 text-amber-300 fill-amber-300" />
-              <span className="text-sm font-medium">{formatProfileRating(profile.rating)}</span>
+              <span className="text-sm font-medium">{formatProfileRating(averageRating)}</span>
               <span className="text-xs text-white/70 ml-1">
-                ({myReviews.length} {t('reviewsCount')})
+                ({myReviews.length} {t('reviewsCount')} · {t('averageRating')})
               </span>
             </div>
             <div className="flex items-center gap-1.5 mt-1 text-sm text-white/80">
@@ -333,12 +339,31 @@ export function ProfilePage() {
         <div>
           <h3 className="font-semibold text-gray-900 mb-3">{t('reviews')}</h3>
           <div className="space-y-2">
-            {myReviews.map((review) => (
-              <div key={review.id} className="p-4 rounded-xl bg-white border border-gray-100">
-                <StarRating rating={review.rating ?? 0} />
-                {review.comment && <p className="text-sm text-gray-600 mt-2">{review.comment}</p>}
-              </div>
-            ))}
+            {myReviews.map((review) => {
+              const reviewer = getProfile(review.reviewer_id);
+              const job = jobs.find((j) => j.id === review.job_id);
+              return (
+                <div key={review.id} className="p-4 rounded-xl bg-white border border-gray-100">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <StarRating rating={review.rating ?? 0} />
+                    {review.created_at && (
+                      <span className="text-xs text-gray-400">
+                        {new Date(review.created_at).toLocaleDateString(locale === 'kk' ? 'kk-KZ' : 'ru-RU')}
+                      </span>
+                    )}
+                  </div>
+                  {reviewer?.full_name && (
+                    <p className="text-xs text-gray-500 mb-1">
+                      {t('reviewFrom')}: {reviewer.full_name}
+                    </p>
+                  )}
+                  {job?.title && (
+                    <p className="text-xs text-gray-400 mb-2 truncate">{job.title}</p>
+                  )}
+                  {review.comment && <p className="text-sm text-gray-600">{review.comment}</p>}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

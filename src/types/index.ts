@@ -69,8 +69,28 @@ export interface Review {
   target_id: string;
   rating: number;
   comment: string;
+  created_at?: string;
 }
 
+export interface Conversation {
+  id: string;
+  job_id: string;
+  worker_id: string;
+  client_id: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface Message {
+  id: string;
+  conversation_id: string;
+  sender_id: string | null;
+  content: string;
+  is_system?: boolean;
+  created_at: string;
+}
+
+/** @deprecated Legacy job-scoped chat — use Conversation + Message */
 export interface ChatMessage {
   id: string;
   job_id: string;
