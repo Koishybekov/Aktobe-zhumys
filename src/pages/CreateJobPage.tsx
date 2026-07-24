@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { Phone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -10,7 +10,7 @@ import { ProSubscriptionModal } from '@/components/profile/ProSubscription';
 import { useToast } from '@/components/ui/use-toast';
 import { useAppStore } from '@/store/useAppStore';
 import { getActiveUserId } from '@/store/useAuthStore';
-import { CATEGORIES, DEFAULT_CITY, AKTOBE_DISTRICTS } from '@/lib/constants';
+import { CATEGORIES, DEFAULT_JOB_CITY } from '@/lib/constants';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { hasActiveSubscription } from '@/lib/subscription';
 import {
@@ -21,13 +21,15 @@ import {
   FREE_JOB_POST_LIMIT,
 } from '@/lib/jobPostLimit';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import { normalizePhone, isValidKzPhone } from '@/lib/authPhone';
 import { cn } from '@/lib/utils';
 
 export function CreateJobPage() {
   const navigate = useNavigate();
-  const { t, category, locale } = useTranslation();
+  const { t, category } = useTranslation();
   const { toast } = useToast();
   const createJob = useAppStore((s) => s.createJob);
+  const fetchJobs = useAppStore((s) => s.fetchJobs);
   const jobs = useAppStore((s) => s.jobs);
   const currentUser = useAppStore((s) => s.currentUser);
 
@@ -39,39 +41,62 @@ export function CreateJobPage() {
   const remainingPosts = getRemainingFreePosts(postedCount, currentUser);
   const postLimitReached = isPostPaywallActive(postedCount, currentUser);
 
-  const stepLabels = [t('stepTitle'), t('stepDescription'), t('stepPayment')];
-
-  const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
+  const [phoneError, setPhoneError] = useState('');
   const [form, setForm] = useState({
     title: '',
-    category: '',
+    company: '',
+    city: DEFAULT_JOB_CITY,
+    salary: '',
     description: '',
-    location_address: '',
-    district: '',
-    city: DEFAULT_CITY,
-    price: '',
+    phone: currentUser.phone ?? '',
+    category: '',
   });
 
-  const update = (field: string, value: string) => setForm((f) => ({ ...f, [field]: value }));
+  const update = (field: string, value: string) => {
+    setForm((f) => ({ ...f, [field]: value }));
+    if (field === 'phone') setPhoneError('');
+  };
 
   const openPaywall = () => {
     setPaywallOpen(true);
     toast({ title: t('paywallPostBlocked'), variant: 'default' });
   };
 
-  const canProceed = () => {
-    if (postLimitReached) return false;
-    if (step === 0) return form.title.trim().length >= 3 && form.category;
-    if (step === 1) return form.description.trim().length >= 10 && form.location_address.trim().length >= 3 && form.district;
-    if (step === 2) return Number(form.price) >= 1000;
-    return false;
+  const validatePhone = (): boolean => {
+    const normalized = normalizePhone(form.phone);
+    if (!form.phone.trim()) {
+      setPhoneError(t('errPhoneRequired'));
+      return false;
+    }
+    if (!isValidKzPhone(normalized)) {
+      setPhoneError(t('errPhone'));
+      return false;
+    }
+    return true;
   };
 
-  const handleSubmit = async () => {
+  const isFormValid = () =>
+    form.title.trim().length >= 3 &&
+    form.company.trim().length >= 2 &&
+    form.description.trim().length >= 10 &&
+    form.category &&
+    Number(form.salary) >= 1000 &&
+    isValidKzPhone(normalizePhone(form.phone));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!validatePhone()) return;
+
     if (!canPostJob(postedCount, currentUser)) {
       openPaywall();
+      return;
+    }
+
+    if (!isFormValid()) {
+      toast({ title: t('errFormIncomplete'), variant: 'error' });
       return;
     }
 
@@ -79,15 +104,16 @@ export function CreateJobPage() {
     try {
       await createJob({
         title: form.title.trim(),
-        category: form.category,
+        company: form.company.trim(),
+        city: form.city.trim() || DEFAULT_JOB_CITY,
+        salary: Number(form.salary),
         description: form.description.trim(),
-        location_address: form.location_address.trim(),
-        city: form.city,
-        district: form.district,
-        price: Number(form.price),
+        phone: normalizePhone(form.phone),
+        category: form.category,
       });
+      await fetchJobs();
       toast({ title: t('jobPublished'), variant: 'success' });
-      navigate('/my-jobs');
+      navigate('/');
     } catch (err) {
       if (err instanceof Error && err.message === 'POST_LIMIT') {
         openPaywall();
@@ -113,7 +139,8 @@ export function CreateJobPage() {
             {remainingPosts > 0
               ? t('paywallPostRemaining').replace('{count}', String(remainingPosts))
               : t('paywallPostBlocked')}
-            {postedCount > 0 && ` · ${t('paywallPostUsed').replace('{count}', String(Math.min(postedCount, FREE_JOB_POST_LIMIT)))}`}
+            {postedCount > 0 &&
+              ` · ${t('paywallPostUsed').replace('{count}', String(Math.min(postedCount, FREE_JOB_POST_LIMIT)))}`}
           </p>
         )}
       </div>
@@ -134,99 +161,111 @@ export function CreateJobPage() {
         </div>
       )}
 
-      <div className={cn('flex items-center gap-2 mb-8', formDisabled && 'opacity-50 pointer-events-none')}>
-        {stepLabels.map((label, i) => (
-          <div key={label} className="flex items-center gap-2 flex-1">
-            <div className={cn(
-              'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold transition-colors',
-              i < step ? 'bg-emerald-600 text-white' : i === step ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'
-            )}>
-              {i < step ? <Check className="h-4 w-4" /> : i + 1}
-            </div>
-            <span className={cn('text-xs font-medium hidden sm:block', i === step ? 'text-gray-900' : 'text-gray-400')}>{label}</span>
-            {i < stepLabels.length - 1 && <div className={cn('h-0.5 flex-1 rounded', i < step ? 'bg-emerald-500' : 'bg-gray-100')} />}
+      <form
+        onSubmit={(e) => void handleSubmit(e)}
+        className={cn(
+          'rounded-2xl border border-gray-100 bg-white p-6 shadow-sm space-y-5',
+          formDisabled && 'opacity-50 pointer-events-none'
+        )}
+      >
+        <div className="space-y-2">
+          <Label htmlFor="title">{t('jobTitle')} *</Label>
+          <Input
+            id="title"
+            placeholder={t('jobTitlePlaceholder')}
+            value={form.title}
+            onChange={(e) => update('title', e.target.value)}
+            disabled={formDisabled}
+            required
+            minLength={3}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="company">{t('company')} *</Label>
+          <Input
+            id="company"
+            placeholder={t('companyPlaceholder')}
+            value={form.company}
+            onChange={(e) => update('company', e.target.value)}
+            disabled={formDisabled}
+            required
+            minLength={2}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="city">{t('city')}</Label>
+          <Input id="city" value={form.city} readOnly disabled className="bg-gray-50 text-gray-600" />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="salary">{t('salary')} *</Label>
+          <Input
+            id="salary"
+            type="number"
+            placeholder="150000"
+            min={1000}
+            value={form.salary}
+            onChange={(e) => update('salary', e.target.value)}
+            disabled={formDisabled}
+            required
+          />
+          <p className="text-xs text-gray-400">{t('minPayment')}</p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="description">{t('description')} *</Label>
+          <Textarea
+            id="description"
+            placeholder={t('descriptionPlaceholder')}
+            value={form.description}
+            onChange={(e) => update('description', e.target.value)}
+            rows={5}
+            disabled={formDisabled}
+            required
+            minLength={10}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="phone">{t('contactPhone')} *</Label>
+          <div className="relative">
+            <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              id="phone"
+              type="tel"
+              placeholder={t('phonePlaceholder')}
+              value={form.phone}
+              onChange={(e) => update('phone', e.target.value)}
+              disabled={formDisabled}
+              required
+              className={cn('pl-10', phoneError && 'border-red-400 focus-visible:ring-red-400')}
+            />
           </div>
-        ))}
-      </div>
+          {phoneError && <p className="text-xs text-red-600">{phoneError}</p>}
+        </div>
 
-      <div className={cn('rounded-2xl border border-gray-100 bg-white p-6 shadow-sm space-y-5', formDisabled && 'opacity-50 pointer-events-none')}>
-        {step === 0 && (
-          <>
-            <div className="space-y-2">
-              <Label htmlFor="title">{t('jobTitle')}</Label>
-              <Input id="title" placeholder={t('jobTitlePlaceholder')} value={form.title} onChange={(e) => update('title', e.target.value)} disabled={formDisabled} />
-            </div>
-            <div className="space-y-2">
-              <Label>{t('category')}</Label>
-              <Select value={form.category} onValueChange={(v) => update('category', v)} disabled={formDisabled}>
-                <SelectTrigger><SelectValue placeholder={t('selectCategory')} /></SelectTrigger>
-                <SelectContent>
-                  {CATEGORIES.filter((c) => c.id !== 'all').map((cat) => (
-                    <SelectItem key={cat.id} value={cat.id}>{category(cat.id)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </>
-        )}
+        <div className="space-y-2">
+          <Label>{t('category')} *</Label>
+          <Select value={form.category} onValueChange={(v) => update('category', v)} disabled={formDisabled} required>
+            <SelectTrigger>
+              <SelectValue placeholder={t('selectCategory')} />
+            </SelectTrigger>
+            <SelectContent>
+              {CATEGORIES.filter((c) => c.id !== 'all').map((cat) => (
+                <SelectItem key={cat.id} value={cat.id}>
+                  {category(cat.id)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
-        {step === 1 && (
-          <>
-            <div className="space-y-2">
-              <Label htmlFor="description">{t('description')}</Label>
-              <Textarea id="description" placeholder={t('descriptionPlaceholder')} value={form.description} onChange={(e) => update('description', e.target.value)} rows={5} disabled={formDisabled} />
-            </div>
-            <div className="space-y-2">
-              <Label>{t('district')}</Label>
-              <Select value={form.district} onValueChange={(v) => update('district', v)} disabled={formDisabled}>
-                <SelectTrigger><SelectValue placeholder={t('selectDistrict')} /></SelectTrigger>
-                <SelectContent>
-                  {AKTOBE_DISTRICTS.filter((d) => d.id !== 'all').map((d) => (
-                    <SelectItem key={d.id} value={d.id}>{locale === 'kk' ? d.labelKk : d.labelRu}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="location">{t('location')}</Label>
-              <Input id="location" placeholder={t('locationPlaceholder')} value={form.location_address} onChange={(e) => update('location_address', e.target.value)} disabled={formDisabled} />
-            </div>
-          </>
-        )}
-
-        {step === 2 && (
-          <>
-            <div className="space-y-2">
-              <Label htmlFor="price">{t('payment')}</Label>
-              <Input id="price" type="number" placeholder="5000" min={1000} value={form.price} onChange={(e) => update('price', e.target.value)} disabled={formDisabled} />
-              <p className="text-xs text-gray-400">{t('minPayment')}</p>
-            </div>
-            <div className="rounded-xl bg-emerald-50 p-4 space-y-2">
-              <h4 className="font-semibold text-emerald-800 text-sm">{t('summary')}</h4>
-              <p className="text-sm text-emerald-700"><strong>{form.title}</strong></p>
-              <p className="text-xs text-emerald-600">{category(form.category)} · {form.district}</p>
-              <p className="text-lg font-bold text-emerald-700">{Number(form.price).toLocaleString()} ₸</p>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="flex gap-3 mt-6">
-        {step > 0 && (
-          <Button variant="outline" onClick={() => setStep((s) => s - 1)} className="flex-1" disabled={formDisabled}>
-            <ChevronLeft className="h-4 w-4" /> {t('back')}
-          </Button>
-        )}
-        {step < stepLabels.length - 1 ? (
-          <Button onClick={() => setStep((s) => s + 1)} disabled={!canProceed()} className="flex-1">
-            {t('next')} <ChevronRight className="h-4 w-4" />
-          </Button>
-        ) : (
-          <Button onClick={handleSubmit} disabled={!canProceed() || submitting || formDisabled} className="flex-1">
-            {submitting ? t('publishing') : t('publish')}
-          </Button>
-        )}
-      </div>
+        <Button type="submit" disabled={!isFormValid() || submitting || formDisabled} className="w-full" size="lg">
+          {submitting ? t('publishing') : t('publish')}
+        </Button>
+      </form>
 
       <ProSubscriptionModal
         open={paywallOpen}

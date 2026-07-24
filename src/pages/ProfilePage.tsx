@@ -9,7 +9,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAppStore } from '@/store/useAppStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { getActiveUserId } from '@/store/useAuthStore';
-import { formatPrice, getInitials } from '@/lib/utils';
+import { formatPrice, getInitials, getJobSalary } from '@/lib/utils';
 import { CATEGORY_COLORS } from '@/lib/constants';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { ProSubscriptionCard, ProSubscriptionModal } from '@/components/profile/ProSubscription';
@@ -218,7 +218,7 @@ export function ProfilePage() {
                         {item.role === 'client' ? t('roleClientActivity') : t('roleWorkerActivity')}
                       </span>
                       <span className="text-xs text-gray-300">·</span>
-                      <span className="text-xs text-emerald-600 font-medium">{formatPrice(item.price)}</span>
+                      <span className="text-xs text-emerald-600 font-medium">{formatPrice(getJobSalary(item))}</span>
                     </div>
                   </div>
                   <StatusBadge status={item.status} />

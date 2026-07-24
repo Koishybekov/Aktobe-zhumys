@@ -26,15 +26,29 @@ export interface Job {
   id: string;
   client_id: string;
   title: string;
+  company?: string;
   description: string;
   category: string;
-  price: number;
-  location_address: string;
+  salary?: number;
+  /** @deprecated use salary */
+  price?: number;
+  phone?: string;
+  location_address?: string;
   city: string;
   district?: string;
   status: JobStatus;
   selected_worker_id: string | null;
   created_at: string;
+}
+
+export interface CreateJobInput {
+  title: string;
+  company: string;
+  city: string;
+  salary: number;
+  description: string;
+  phone: string;
+  category: string;
 }
 
 export interface JobApplication {

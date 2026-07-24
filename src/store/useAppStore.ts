@@ -7,6 +7,7 @@ import type {
   Review,
   ChatMessage,
   ActiveMode,
+  CreateJobInput,
   ReviewInput,
 } from '@/types';
 import { supabase, IS_MOCK_MODE } from '@/lib/supabase';
@@ -22,10 +23,7 @@ import {
 } from '@/lib/jobPostLimit';
 import { fetchJobsFromSupabase } from '@/lib/jobsApi';
 import { updateMockUserProfileByPhone, findMockUserByPhone } from '@/lib/mockAuth';
-import {
-  mockProfiles,
-  getProfileById,
-} from '@/data/mockData';
+import { getProfileById } from '@/data/mockData';
 
 interface AppState {
   currentUser: Profile;
@@ -69,7 +67,7 @@ interface AppState {
   applyToJob: (jobId: string) => Promise<void>;
   acceptWorker: (jobId: string, workerId: string) => Promise<void>;
   completeJob: (jobId: string) => Promise<void>;
-  createJob: (job: Omit<Job, 'id' | 'client_id' | 'status' | 'selected_worker_id' | 'created_at'>) => Promise<Job>;
+  createJob: (job: CreateJobInput) => Promise<Job>;
   sendMessage: (jobId: string, content: string) => Promise<void>;
   submitReview: (input: ReviewInput) => Promise<void>;
   updateProfile: (updates: Partial<Profile>) => Promise<void>;
@@ -84,10 +82,22 @@ function delay(ms = 400): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function emptyProfile(): Profile {
+  return {
+    id: '',
+    phone: '',
+    full_name: '',
+    avatar_url: null,
+    role: 'both',
+    rating: 0,
+    city: DEFAULT_CITY,
+  };
+}
+
 function resolveCurrentUser(): Profile {
   const authProfile = useAuthStore.getState().profile ?? loadAuthSession()?.profile;
   if (authProfile?.onboarding_completed) return authProfile;
-  return mockProfiles[0];
+  return emptyProfile();
 }
 
 function loadMockState() {
@@ -97,7 +107,7 @@ function loadMockState() {
     applications: [] as JobApplication[],
     reviews: [] as Review[],
     messages: [] as ChatMessage[],
-    profiles: [...mockProfiles],
+    profiles: user.id ? [user] : [],
     currentUser: user,
     selectedCity: user.city ?? DEFAULT_CITY,
     selectedDistrict: 'all',
@@ -210,7 +220,7 @@ function setupRealtime(set: (fn: (state: AppState) => Partial<AppState>) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  currentUser: mockProfiles[0],
+  currentUser: emptyProfile(),
   profiles: [],
   activeMode: 'worker',
   jobs: [],
@@ -350,7 +360,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       initialized: false,
       isLoading: false,
       initError: null,
-      currentUser: mockProfiles[0],
+      currentUser: emptyProfile(),
       selectedCity: DEFAULT_CITY,
     });
   },
@@ -362,18 +372,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSearchQuery: (query) => set({ searchQuery: query }),
 
   getOpenJobs: () => {
-    const { jobs, selectedCity, selectedDistrict, selectedCategory, searchQuery } = get();
+    const { jobs, selectedDistrict, selectedCategory, searchQuery } = get();
     return jobs.filter((job) => {
       if (job.status && job.status.toLowerCase() !== 'open') return false;
-      if (selectedCity !== 'All' && job.city && job.city !== selectedCity) return false;
       if (selectedDistrict !== 'all' && job.district && job.district !== selectedDistrict) return false;
       if (selectedCategory !== 'all' && job.category !== selectedCategory) return false;
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         return (
           job.title.toLowerCase().includes(q) ||
+          (job.company?.toLowerCase().includes(q) ?? false) ||
           job.description.toLowerCase().includes(q) ||
-          job.location_address.toLowerCase().includes(q)
+          (job.location_address?.toLowerCase().includes(q) ?? false)
         );
       }
       return true;
@@ -383,7 +393,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   getProfile: (id) => {
     const uid = userId();
     if (id === uid) return get().currentUser;
-    return get().profiles.find((p) => p.id === id) ?? getProfileById(id) ?? mockProfiles.find((p) => p.id === id);
+    return get().profiles.find((p) => p.id === id) ?? getProfileById(id);
   },
 
   getApplicationsForJob: (jobId) => get().applications.filter((a) => a.job_id === jobId),
@@ -487,16 +497,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       throw new Error('POST_LIMIT');
     }
 
-    const { data, error } = await supabase!
-      .from('jobs')
-      .insert({
-        ...jobData,
-        client_id: uid,
-        status: 'open',
-        selected_worker_id: null,
-      })
-      .select()
-      .single();
+    const payload = {
+      title: jobData.title.trim(),
+      company: jobData.company.trim(),
+      city: jobData.city.trim() || DEFAULT_CITY,
+      salary: jobData.salary,
+      description: jobData.description.trim(),
+      phone: jobData.phone,
+      category: jobData.category,
+      client_id: uid,
+      status: 'open' as const,
+      selected_worker_id: null,
+      price: jobData.salary,
+      location_address: jobData.company.trim(),
+    };
+
+    const { data, error } = await supabase!.from('jobs').insert(payload).select().single();
 
     if (error) throw error;
     if (!data) throw new Error('Failed to create job');

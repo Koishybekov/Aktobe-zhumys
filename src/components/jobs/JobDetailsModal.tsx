@@ -9,7 +9,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge, StarRating } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { formatPrice, formatRelativeTime, getInitials } from '@/lib/utils';
+import { formatPrice, formatRelativeTime, getInitials, getJobSalary } from '@/lib/utils';
 import { openWhatsApp } from '@/lib/whatsapp';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import type { Job, Profile } from '@/types';
@@ -35,10 +35,12 @@ export function JobDetailsModal({
 
   if (!job) return null;
 
+  const contactPhone = job.phone ?? client?.phone;
+
   const handleWhatsApp = () => {
-    if (!client?.phone) return;
+    if (!contactPhone) return;
     const message = `${t('whatsappMessage')} "${job.title}"`;
-    openWhatsApp(client.phone, message);
+    openWhatsApp(contactPhone, message);
   };
 
   return (
@@ -51,8 +53,11 @@ export function JobDetailsModal({
               <span className="text-xs text-gray-400 ml-auto">{job.city}{job.district ? ` · ${job.district}` : ''}</span>
             </div>
             <DialogTitle className="text-xl text-left">{job.title}</DialogTitle>
+            {job.company && (
+              <p className="text-sm text-gray-500 text-left mt-0.5">{job.company}</p>
+            )}
             <DialogDescription className="text-left text-emerald-600 font-bold text-2xl mt-1">
-              {formatPrice(job.price)}
+              {formatPrice(getJobSalary(job))}
             </DialogDescription>
           </DialogHeader>
 
@@ -61,8 +66,14 @@ export function JobDetailsModal({
 
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <MapPin className="h-4 w-4 shrink-0 text-emerald-500" />
-              {job.location_address}
+              {job.city}
             </div>
+            {contactPhone && (
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <MessageCircle className="h-4 w-4 shrink-0 text-emerald-500" />
+                {contactPhone}
+              </div>
+            )}
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <Clock className="h-4 w-4 shrink-0 text-emerald-500" />
               {t('posted')} {formatRelativeTime(job.created_at)}
@@ -90,7 +101,7 @@ export function JobDetailsModal({
         </div>
 
         <div className="p-4 border-t border-gray-100 bg-gray-50 space-y-2">
-          {client?.phone && (
+          {contactPhone && (
             <Button
               className="w-full bg-[#25D366] hover:bg-[#20BD5A] text-white"
               size="lg"

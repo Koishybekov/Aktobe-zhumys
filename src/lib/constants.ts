@@ -1,5 +1,7 @@
 export const APP_NAME = 'Актобе Жұмыс';
-export const DEFAULT_CITY = 'Актобе';
+/** Default city stored in jobs table */
+export const DEFAULT_JOB_CITY = 'Aktobe';
+export const DEFAULT_CITY = DEFAULT_JOB_CITY;
 
 export const AKTOBE_DISTRICTS = [
   { id: 'all', labelKk: 'Барлық аудан', labelRu: 'Все районы' },

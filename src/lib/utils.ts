@@ -16,6 +16,11 @@ export function formatPrice(price: number): string {
   }).format(price) + ' ₸';
 }
 
+/** Salary from new or legacy job field */
+export function getJobSalary(job: { salary?: number; price?: number }): number {
+  return job.salary ?? job.price ?? 0;
+}
+
 export function formatRelativeTime(dateString: string): string {
   try {
     const locale = useLocaleStore.getState().locale;

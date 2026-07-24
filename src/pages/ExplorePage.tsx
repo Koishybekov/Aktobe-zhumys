@@ -13,7 +13,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { getActiveUserId } from '@/store/useAuthStore';
 import { useTranslation } from '@/lib/i18n/useTranslation';
 import { hasActiveSubscription } from '@/lib/subscription';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { isSupabaseConfigured } from '@/lib/supabase';
 import {
   tryRecordJobView,
   getRemainingFreeViews,
@@ -54,25 +54,6 @@ export function ExplorePage() {
 
   /** Загрузка вакансий из Supabase при открытии страницы */
   useEffect(() => {
-    async function loadJobsFromSupabase() {
-      if (!supabase) {
-        console.error('[ExplorePage] Supabase client is null');
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('jobs')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      console.log('Jobs from Supabase:', data);
-
-      if (error) {
-        console.error('Jobs from Supabase — error:', error.message, error);
-      }
-    }
-
-    void loadJobsFromSupabase();
     void fetchJobs();
   }, [fetchJobs]);
 
