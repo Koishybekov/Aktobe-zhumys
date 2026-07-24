@@ -11,6 +11,7 @@ import type {
   ReviewInput,
 } from '@/types';
 import { supabase, IS_MOCK_MODE } from '@/lib/supabase';
+import { DEFAULT_CITY } from '@/lib/constants';
 import { filterOpenJobs } from '@/lib/jobFilters';
 import { generateId } from '@/lib/utils';
 import { loadAuthSession, saveAuthSession, updateSessionProfile } from '@/lib/authStorage';
