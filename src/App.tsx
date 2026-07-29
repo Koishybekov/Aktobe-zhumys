@@ -17,6 +17,7 @@ import { AdminPage } from '@/pages/AdminPage';
 import { useAppStore } from '@/store/useAppStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useLocaleStore } from '@/store/useLocaleStore';
+import { InstallPrompt } from '@/InstallPrompt';
 
 function AppBootstrap({ children }: { children: React.ReactNode }) {
   const [bootstrapped, setBootstrapped] = useState(false);
@@ -106,6 +107,7 @@ export default function App() {
             </Route>
             <Route path="*" element={<Navigate to="/auth" replace />} />
           </Routes>
+          <InstallPrompt />
         </AppBootstrap>
       </BrowserRouter>
     </ToastContextProvider>
