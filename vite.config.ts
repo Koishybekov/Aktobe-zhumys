@@ -13,7 +13,7 @@ export default defineConfig({
         name: 'Актобе Жұмыс',
         short_name: 'Актобе Жұмыс',
         description: 'Жартылай жұмыс платформасы · Актобе',
-        theme_color: '#059669',
+        theme_color: '#16a34a',
         background_color: '#ffffff',
         display: 'standalone',
         orientation: 'portrait',

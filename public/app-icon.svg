@@ -1,21 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
-  <defs>
-    <linearGradient id="bg" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#059669"/>
-      <stop offset="1" stop-color="#047857"/>
-    </linearGradient>
-    <linearGradient id="shine" x1="160" y1="120" x2="360" y2="320" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#ffffff" stop-opacity="0.28"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <rect x="24" y="24" width="464" height="464" rx="96" fill="url(#shine)"/>
-  <rect x="128" y="176" width="256" height="192" rx="36" fill="#ffffff" fill-opacity="0.96"/>
-  <path d="M176 176V152C176 124.386 198.386 102 226 102H286C313.614 102 336 124.386 336 152V176" stroke="#ffffff" stroke-width="24" stroke-linecap="round"/>
-  <rect x="176" y="232" width="64" height="16" rx="8" fill="#059669"/>
-  <rect x="176" y="272" width="160" height="16" rx="8" fill="#D1FAE5"/>
-  <rect x="176" y="312" width="128" height="16" rx="8" fill="#D1FAE5"/>
-  <circle cx="368" cy="368" r="72" fill="#FBBF24"/>
-  <path d="M344 368L360 384L392 352" stroke="#065F46" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <rect width="512" height="512" rx="100" fill="#16a34a"/>
+  <g fill="#ffffff" transform="translate(96, 96) scale(0.625)">
+    <!-- Briefcase handle -->
+    <path d="M 170 30 C 145 30, 130 45, 130 70 L 130 110 L 382 110 L 382 70 C 382 45, 367 30, 342 30 Z M 175 70 L 337 70 L 337 110 L 175 110 Z" />
+    <!-- Briefcase main body -->
+    <path d="M 50 120 C 30 120, 20 135, 20 155 L 20 420 C 20 445, 35 460, 60 460 L 452 460 C 477 460, 492 445, 492 420 L 492 155 C 492 135, 482 120, 462 120 Z M 60 165 L 452 165 C 458 165, 462 169, 462 175 L 462 250 C 380 290, 132 290, 50 250 L 50 175 C 50 169, 54 165, 60 165 Z M 50 290 C 120 325, 392 325, 462 290 L 462 415 C 462 421, 458 425, 452 425 L 60 425 C 54 425, 50 421, 50 415 Z" />
+    <!-- Lock latch -->
+    <path d="M 226 240 C 226 230, 234 220, 246 220 L 266 220 C 278 220, 286 230, 286 240 L 286 300 C 286 315, 274 325, 256 325 C 238 325, 226 315, 226 300 Z" />
+    <!-- Bottom corner details -->
+    <path d="M 70 380 L 110 420 L 70 420 Z M 442 380 L 442 420 L 402 420 Z" />
+  </g>
 </svg>
